@@ -21,7 +21,7 @@ Building a multi-tab UI in PrimeFaces means managing tab state, lifecycle, navig
 
 Define tabs as annotated CDI beans. DynTabs handles everything else.
 
-
+```java
 @Named
 @TabScoped                              // one bean instance per open tab
 @DynTab(name        = "OrdersDynTab",
@@ -38,12 +38,13 @@ public class OrdersBean extends BaseDyntabCdiBean {
         orders = orderService.findAll();
     }
 }
-
+```
 
 Open the tab from a menu item:
 
-
+```xml
 <p:menuitem value="Orders" action="uishell:Orders"/>
+```
 
 
 That's it. DynTabs opens the tab, creates an isolated `OrdersBean` instance in `@TabScoped`, calls `accessPointMethod()`, and prevents duplicates if the user clicks again.
@@ -71,7 +72,7 @@ Adding AI to a Jakarta EE application with LangChain4J means learning `ChatLangu
 
 Three things cover 90% of use cases:
 
-
+```java
 // 1. Simple chat
 Conversation chat = EasyAI.chat()
     .withMemory(20)
@@ -79,9 +80,9 @@ Conversation chat = EasyAI.chat()
     .build();
 
 String answer = chat.send("What is a HashMap?");
+```
 
-
-
+```java
 // 2. Assistant that calls your Java services (no @Tool annotations needed)
 @EasyAIAssistant(systemMessage = "You are an e-commerce support bot.")
 public interface SupportBot {
@@ -95,9 +96,9 @@ SupportBot bot = EasyAI.assistant(SupportBot.class)
 
 bot.ask("Where is my order #12345?");
 // AI calls orderService.findOrder("12345") automatically
+```
 
-
-
+```java
 // 3. AI that answers from your documents (PDF, DOCX, TXT)
 @EasyRAG(source = "classpath:company-policy.pdf")
 @EasyAIAssistant(systemMessage = "Answer based on the company policy.")
@@ -107,6 +108,7 @@ public interface PolicyBot {
 
 PolicyBot bot = EasyAI.assistant(PolicyBot.class).build();
 bot.ask("How many vacation days do employees get?");
+```
 
 
 ### What you get
@@ -149,14 +151,14 @@ EasyAI also works outside Jakarta EE (plain Java, unit tests) — just call `.bu
 
 **Quickest start:** clone the TabForge AI Starter — a pre-configured Maven WAR project for Eclipse with everything already set up. Open it, deploy, and start writing tab beans immediately.
 
-> Starter repository link coming soon.
+> [TabForge AI Starter](https://github.com/tabforgeai/tabforge-ai-starter-)
 
 **Add to an existing project:** add the dependency to your `pom.xml` (packaging must be `war`):
 
 ```xml
 <dependency>
-    <groupId>com.dyntabs</groupId>
-    <artifactId>dyntabs</artifactId>
+    <groupId>io.github.tabforgeai</groupId>
+    <artifactId>tabforge-ai</artifactId>
     <version>1.0.0</version>
 </dependency>
 ```
@@ -170,7 +172,7 @@ Then follow the setup guides — DynTabs takes 6 steps (faces-config, template i
 
 - [EasyAI Developer Guide](docs/easyai_guide.txt) — full API reference, all use cases, configuration, tips
 - [DynTabs Developer Guide](docs/dyntabs_guide.txt) — setup, all use cases, annotations reference, tips
-- [JavaDoc](docs/apidocs/index.html) — API reference (also available at `https://javadoc.io/doc/com.dyntabs/dyntabs` after Maven Central release)
+- [JavaDoc](docs/apidocs/index.html) — API reference (also available at `https://javadoc.io/doc/io.github.tabforgeai/tabforge-ai` after Maven Central release)
 
 ---
 
