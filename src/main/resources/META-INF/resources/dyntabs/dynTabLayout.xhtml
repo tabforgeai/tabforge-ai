@@ -1,0 +1,24 @@
+<ui:composition  xmlns="http://www.w3.org/1999/xhtml"
+  			     xmlns:f="http://xmlns.jcp.org/jsf/core"
+				 xmlns:h="http://xmlns.jcp.org/jsf/html"
+				 xmlns:ui="http://xmlns.jcp.org/jsf/facelets"
+				 xmlns:c="http://java.sun.com/jsp/jstl/core"
+				 xmlns:fn="http://java.sun.com/jsp/jstl/functions"
+				 xmlns:p="http://primefaces.org/ui">
+  <h:panelGroup id="fragmentPanel"> <!-- mainForm:mainTabView:_sub_r1:fragmentPanel -->
+    <c:set var="dynTab" value="#{dynTab}" scope="request"/>
+    <p:growl id="tabGrowl" widgetVar="theGrowl" autoUpdate="true" showDetail="true" life="3000" />
+       <!-- "#{cdiBean != null ? cdiBean.mainContentRendered : true}" -->
+    <h:panelGroup id="mainContent" rendered="#{dynTab.cdiBean != null ? dynTab.cdiBean.mainContentRendered : true}">
+        <ui:insert name="mainContent"/>
+    </h:panelGroup>
+       <!-- "#{cdiBean != null ? cdiBean.errPageRendered : false}" -->
+     <h:panelGroup id="errPage" rendered="#{dynTab.cdiBean != null ? dynTab.cdiBean.errPageRendered : false}" >
+	     <div style="display: flex; align-items: center; justify-content: center; flex: 1; flex-direction: column; height:100%">
+             <h:outputText   value="#{dynTab.cdiBean.errMsg}"  style="font-weight: bold; font-size:15px; color:red;"/>
+             <p:spacer height="10" />
+             <p:commandButton value="Ok" process="@this" actionListener="#{dynTabManager.removeCurrentTab}"/>
+	     </div>
+    </h:panelGroup>
+</h:panelGroup>
+</ui:composition>

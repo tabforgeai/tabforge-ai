@@ -1,0 +1,16 @@
+EasyAI Test Document
+
+This is a test document for the RAG (Retrieval-Augmented Generation) pipeline.
+It contains information about the EasyAI library.
+
+EasyAI is a Java abstraction layer over LangChain4J that simplifies AI integration.
+It provides a builder pattern API for creating chat conversations and AI assistants.
+
+Key features:
+- Simple chat with memory support
+- AI Assistant with automatic tool registration
+- RAG support for document-augmented AI responses
+- CDI integration for dependency injection
+
+The library supports OpenAI and Ollama providers out of the box.
+Configuration is loaded from easyai.properties on the classpath.

@@ -1,0 +1,27 @@
+<ui:composition  xmlns="http://www.w3.org/1999/xhtml"
+                 xmlns:f="http://xmlns.jcp.org/jsf/core"
+                 xmlns:h="http://xmlns.jcp.org/jsf/html"
+                 xmlns:ui="http://xmlns.jcp.org/jsf/facelets"
+                 xmlns:c="http://java.sun.com/jsp/jstl/core"
+                 xmlns:p="http://primefaces.org/ui">
+
+    <h:form id="mainForm">
+        <p:growl id="msgs" showDetail="false" life="3000" autoUpdate="true" />
+        <p:tabView id="mainTabView" activeIndex="#{dynTabManager.activeTabIndex}"
+                   widgetVar="mainTabView">
+            <p:ajax event="tabChange" listener="#{dynTabManager.onTabChange}"/>
+            <p:ajax event="tabClose" listener="#{dynTabManager.onTabClose}"/>
+            <c:forEach items="#{dynTabManager.tabMenuModel}" var="tab">
+                <p:tab id="#{tab.id}" title="#{tab.title}" closable="#{tab.closeable}">
+                    <f:subview id="_sub_#{tab.id}">
+                        <ui:include src="#{tab.includePage}">
+                            <ui:param name="cdiBean" value="#{tab.cdiBean}"/>
+                            <ui:param name="dynTab" value="#{tab}"/>
+                        </ui:include>
+                    </f:subview>
+                </p:tab>
+            </c:forEach>
+        </p:tabView>
+    </h:form>
+
+</ui:composition>

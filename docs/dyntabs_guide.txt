@@ -1,0 +1,706 @@
+================================================================================
+  DynTabs - Developer Guide
+  Dynamic Tabs for Jakarta EE + PrimeFaces
+================================================================================
+
+  What is DynTabs?
+  ----------------
+  DynTabs is a framework for building multi-tab Jakarta EE web applications with
+  PrimeFaces. Instead of managing page navigation manually, you define tabs as
+  annotated CDI beans. The framework handles opening, closing, lifecycle, and
+  state - automatically.
+
+  Each tab gets its own isolated CDI bean instance via @TabScoped - a custom CDI
+  scope that lives exactly as long as the tab is open. Open the same tab twice
+  and you get two completely independent bean instances.
+
+  You just need to know 4 things:
+    1. @DynTab          - marks a CDI bean as a tab definition
+    2. @TabScoped       - custom CDI scope: one instance per open tab
+    3. DynTabManager    - API for opening, closing, and selecting tabs
+    4. BaseDyntabCdiBean - base class with tab lifecycle and event support
+
+
+================================================================================
+  SETUP
+================================================================================
+
+  Step 1: Maven dependency
+  ------------------------------------------------
+  Your project packaging must be war. Add the following to your pom.xml:
+
+    <packaging>war</packaging>
+
+    <dependency>
+        <groupId>com.dyntabs</groupId>
+        <artifactId>dyntabs</artifactId>
+        <version>1.0.0</version>
+    </dependency>
+
+    <dependency>
+        <groupId>jakarta.platform</groupId>
+        <artifactId>jakarta.jakartaee-api</artifactId>
+        <version>11.0.0</version>
+        <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+        <groupId>org.primefaces</groupId>
+        <artifactId>primefaces</artifactId>
+        <version>15.0.0</version>
+		<classifier>jakarta</classifier>
+        <scope>compile</scope>
+    </dependency>
+
+    <dependency>
+        <groupId>ch.qos.logback</groupId>
+        <artifactId>logback-classic</artifactId>
+        <version>1.5.12</version>
+        <scope>runtime</scope>
+    </dependency>
+
+  jakarta.jakartaee-api is provided — the application server supplies it
+  at runtime. PrimeFaces and logback are bundled inside your WAR.
+
+  DynTabs uses the SLF4J API for logging. Without an SLF4J implementation
+  (logback or alternative) on the classpath, all DynTabs log output will be
+  silently discarded. Logback can be replaced with any other SLF4J-compatible
+  implementation (Log4j2, slf4j-jdk14, etc.) — the SLF4J API comes
+  transitively from the dyntabs dependency and does not need to be declared.
+
+  Without jakarta.jakartaee-api in pom.xml, your IDE will not find Jakarta EE
+  classes (@Named, @Inject, etc.) at compile time.
+
+  Step 2: Register the phase listener and navigation handler in faces-config.xml
+  ------------------------------------------------
+  Create WEB-INF/faces-config.xml (or add to existing):
+
+    <?xml version="1.0" encoding="UTF-8"?>
+    <faces-config xmlns="https://jakarta.ee/xml/ns/jakartaee"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xsi:schemaLocation="https://jakarta.ee/xml/ns/jakartaee
+                      https://jakarta.ee/xml/ns/jakartaee/web-facesconfig_4_0.xsd"
+                  version="4.0">
+
+        <lifecycle>
+            <phase-listener>dyntabs.scope.TabScopePhaseListener</phase-listener>
+        </lifecycle>
+
+        <application>
+            <!-- Required: handles the "uishell:UniqueIdentifier" navigation pattern -->
+            <navigation-handler>dyntabs.TabNavigationHandler</navigation-handler>
+        </application>
+
+    </faces-config>
+
+  Step 3: Include the DynTabs form in your main page template
+  ------------------------------------------------
+  Add <ui:include src="/dyntabs/mainForm.xhtml" /> to the body of your main
+  template. Place it outside any <h:form> — mainForm.xhtml already contains
+  the form that wraps the entire tab area.
+
+  Minimal template example (e.g., index.xhtml or your layout template):
+
+    <!DOCTYPE html>
+    <html xmlns="http://www.w3.org/1999/xhtml"
+          xmlns:h="http://java.sun.com/jsf/html"
+          xmlns:ui="http://java.sun.com/jsf/facelets"
+          xmlns:p="http://primefaces.org/ui">
+    <h:head>
+        <title>My App</title>
+    </h:head>
+    <h:body>
+
+        <!-- your navigation menu here (p:menubar, p:menu, etc.) -->
+
+        <!-- DynTabs tab area — must be OUTSIDE any <h:form> -->
+        <ui:include src="/dyntabs/mainForm.xhtml" />
+
+    </h:body>
+    </html>
+
+  mainForm.xhtml is packaged inside the DynTabs JAR (META-INF/resources/dyntabs/).
+  It includes the PrimeFaces TabView with all bindings already configured.
+  No manual TabView markup needed.
+
+  Step 4: Structure of tab content pages
+  ------------------------------------------------
+  Every XHTML page referenced by @DynTab(includePage=...) MUST use the
+  DynTabs layout template. This isolates component IDs between tabs and
+  provides the correct PrimeFaces subview structure.
+
+  Required structure for ALL tab content pages:
+
+    <ui:composition xmlns="http://www.w3.org/1999/xhtml"
+          xmlns:ui="http://java.sun.com/jsf/facelets"
+          xmlns:f="http://java.sun.com/jsf/core"
+          xmlns:p="http://primefaces.org/ui"
+          xmlns:h="http://java.sun.com/jsf/html"
+          template="/dyntabs/dynTabLayout.xhtml">
+
+        <ui:define name="mainContent">
+            <!-- your tab content goes here -->
+            <!-- DO NOT add <h:form> here! -->
+            <!-- The form is already in mainForm.xhtml which wraps all tabs. -->
+            <!-- Nested forms are invalid HTML and break JSF/PrimeFaces. -->
+        </ui:define>
+
+    </ui:composition>
+
+  dynTabLayout.xhtml is packaged in the DynTabs JAR, same as mainForm.xhtml.
+
+  Step 5: Create the application tab configuration
+  ------------------------------------------------
+  Create an @ApplicationScoped subclass of DynTabConfig in your application.
+  This is required — DynTabTracker injects it to know which tabs open at
+  startup and what the maximum number of open tabs is.
+
+    import dyntabs.DynTabConfig;
+    import jakarta.enterprise.context.ApplicationScoped;
+    import java.util.List;
+
+    @ApplicationScoped
+    public class AppTabConfig extends DynTabConfig {
+
+        @Override
+        public List<String> getInitialTabNames() {
+            // Tab names that open automatically on page load.
+            // Must match the name attribute in @DynTab on your bean classes.
+            // Return an empty list if no tabs should open at startup.
+            return List.of("HomeDynTab");
+        }
+
+        @Override
+        public int getMaxNumberOfTabs() {
+            return 7;  // override if you need more or fewer simultaneous tabs
+        }
+    }
+
+  Without this class, CDI deployment will fail with:
+    WELD-001408: Unsatisfied dependencies for type DynTabConfig
+
+  Step 6: Configure beans.xml
+  ------------------------------------------------
+  Create WEB-INF/beans.xml to enable CDI bean discovery:
+
+    <?xml version="1.0" encoding="UTF-8"?>
+    <beans bean-discovery-mode="all" version="4.0"
+           xmlns="https://jakarta.ee/xml/ns/jakartaee">
+    </beans>
+
+  bean-discovery-mode="all" is required so the CDI container discovers
+  @TabScoped beans and registers the DynTabs CDI extensions automatically.
+
+  Step 6: Security setup  (optional — only needed for tab access control)
+  ------------------------------------------------
+  Skip this step if you do not use @DynTab(securedResource=true).
+
+  If you need declarative tab security, add the interceptor to beans.xml:
+
+    <beans bean-discovery-mode="all" version="4.0"
+           xmlns="https://jakarta.ee/xml/ns/jakartaee">
+
+        <interceptors>
+            <!-- Enforces allowedRoles on tabs marked securedResource=true -->
+            <class>security.InMemoryAccessCheckInterceptor</class>
+        </interceptors>
+
+    </beans>
+
+  And add to web.xml:
+
+    <!-- Scans @DynTab(securedResource=true) at deploy time.
+         Must be paired with InMemoryAccessCheckInterceptor in beans.xml. -->
+    <listener>
+        <listener-class>security.InMemorySecuredResourceScanner</listener-class>
+    </listener>
+
+    <!-- Java package containing your @TabScoped CDI bean classes -->
+    <context-param>
+        <param-name>cdiBeansPackage</param-name>
+        <param-value>com.example.tabs</param-value>  <!-- change to your package -->
+    </context-param>
+
+
+================================================================================
+  USE CASE 1: Simple Static Tab
+================================================================================
+
+  The most common case. One tab, one bean, one XHTML page.
+
+  --- Step 1: Create the CDI Bean ---
+
+    @Named
+    @TabScoped
+    @DynTab(name        = "UsersDynTab",
+            title       = "Users",
+            includePage = "/WEB-INF/include/users/users.xhtml")
+    public class UsersBean extends BaseDyntabCdiBean {
+
+        @Inject
+        private UserService userService;
+
+        private List<User> users;
+
+        @Override
+        protected void accessPointMethod(Map parameters) {
+            // Called when the tab is opened - load your data here
+            users = userService.findAll();
+        }
+
+        public List<User> getUsers() { return users; }
+    }
+
+  --- Step 2: Add a Menu Item ---
+
+  In your navigation menu XHTML:
+
+    <p:menuitem value="Users" action="uishell:Users"/>
+
+  The pattern is: action="uishell:{uniqueIdentifier}"
+  UniqueIdentifier is derived from name by removing "DynTab" suffix:
+    "UsersDynTab" → "Users"
+
+  Or explicitly: uniqueIdentifier = "Users"
+
+  --- Step 3: Create the Tab Content Page ---
+
+  /WEB-INF/include/users/users.xhtml:
+
+    <ui:composition xmlns="http://www.w3.org/1999/xhtml"
+          xmlns:ui="http://java.sun.com/jsf/facelets"
+          xmlns:f="http://java.sun.com/jsf/core"
+          xmlns:p="http://primefaces.org/ui"
+          xmlns:h="http://java.sun.com/jsf/html"
+          template="/dyntabs/dynTabLayout.xhtml">
+
+        <ui:define name="mainContent">
+            <!-- No <h:form> here! The form is in mainForm.xhtml. -->
+            <p:dataTable value="#{usersBean.users}" var="user">
+                <p:column headerText="Name">
+                    <h:outputText value="#{user.name}" />
+                </p:column>
+            </p:dataTable>
+        </ui:define>
+
+    </ui:composition>
+
+  That's it. When the user clicks "Users" in the menu, DynTabs:
+    1. Opens a new tab with title "Users"
+    2. Includes users.xhtml in the tab
+    3. Creates a new UsersBean instance in @TabScoped
+    4. Calls accessPointMethod() - your data loads
+    5. If "Users" is already open, just selects that tab (no duplicate)
+
+
+================================================================================
+  USE CASE 2: Non-Closeable Tab (Home / Dashboard)
+================================================================================
+
+  For tabs that should always remain open (home, dashboard):
+
+    @Named
+    @TabScoped
+    @DynTab(name        = "HomeDynTab",
+            title       = "Home",
+            closeable   = false,              // user cannot close this tab
+            includePage = "/WEB-INF/include/home/home.xhtml")
+    public class HomeBean extends BaseDyntabCdiBean {
+        // ...
+    }
+
+
+================================================================================
+  USE CASE 3: One Bean, Multiple Tab Definitions
+================================================================================
+
+  @DynTab is @Repeatable. The same CDI bean can serve as multiple different tabs,
+  each with its own title, parameters, and security settings.
+
+    @Named
+    @TabScoped
+    @DynTab(name             = "DocumentsDynTab",
+            uniqueIdentifier = "Documents",
+            title            = "Documents",
+            includePage      = "/WEB-INF/include/docs/docs.xhtml",
+            parameters       = {"listAll=false"})
+    @DynTab(name             = "AllDocsDynTab",
+            uniqueIdentifier = "AllDocs",
+            title            = "All Documents",
+            securedResource  = true,
+            allowedRoles     = {"ADMIN", "MANAGER"},
+            includePage      = "/WEB-INF/include/docs/docs.xhtml",
+            parameters       = {"listAll=true"})
+    public class DocsBean extends BaseDyntabCdiBean {
+
+        private boolean listAll;
+
+        @Override
+        protected void accessPointMethod(Map parameters) {
+            // Read parameter set in the annotation
+            listAll = Boolean.parseBoolean(
+                (String) parameters.getOrDefault("listAll", "false")
+            );
+        }
+
+        public boolean isListAll() { return listAll; }
+    }
+
+  Menu items:
+    <p:menuitem value="Documents"     action="uishell:Documents"/>
+    <p:menuitem value="All Documents" action="uishell:AllDocs" />
+
+  The ADMIN/MANAGER restriction is enforced automatically on tab open.
+  The "Documents" tab is open to everyone.
+
+
+================================================================================
+  USE CASE 4: Dynamic Tab (Multiple Instances at Runtime)
+================================================================================
+
+  When you need multiple simultaneous instances of the same tab type -
+  for example, a "Product Details" tab that can be open for multiple products
+  at the same time, each with its own independent state.
+
+  --- From a menu item (XHTML) ---
+
+    <p:menuitem value="VIP Products"
+                actionListener="#{someBean.openVipProducts}"
+                ajax="true" update="mainForm:mainTabView" />
+
+  --- From a CDI bean ---
+
+    @Inject
+    private DynTabManager dynTabManager;
+
+    public void openVipProducts() {
+        dynTabManager.launchDynamicTab(
+            "VIPProductsDynTab",                          // name
+            "VIP Products",                               // tab title
+            "/WEB-INF/include/products/products.xhtml",  // page
+            "VIPProducts",                                // uniqueIdentifier
+            true,                                         // closeable
+            ProductsBean.class,                           // CDI bean class
+            Map.of("category", "vip", "discount", true)  // parameters
+        );
+    }
+
+    public void openProductDetail(Long productId) {
+        // Open one tab per product - unique ID prevents duplicates
+        dynTabManager.launchDynamicTab(
+            "ProductDetailDynTab",
+            "Product #" + productId,
+            "/WEB-INF/include/products/product_detail.xhtml",
+            "Product_" + productId,    // unique per product
+            true,
+            ProductDetailBean.class,
+            Map.of("productId", productId)
+        );
+    }
+
+  --- Receiving parameters in the bean ---
+
+    @Named
+    @TabScoped
+    public class ProductDetailBean extends BaseDyntabCdiBean {
+
+        private Long productId;
+        private Product product;
+
+        @Override
+        protected void accessPointMethod(Map parameters) {
+            productId = (Long) parameters.get("productId");
+            product = productService.findById(productId);
+        }
+
+        public Product getProduct() { return product; }
+    }
+
+
+================================================================================
+  USE CASE 5: Tab Lifecycle
+================================================================================
+
+  Every tab bean has two lifecycle methods you can override:
+
+    @Named
+    @TabScoped
+    @DynTab(name = "OrdersDynTab", title = "Orders",
+            includePage = "/WEB-INF/include/orders/orders.xhtml")
+    public class OrdersBean extends BaseDyntabCdiBean {
+
+        @Override
+        protected void accessPointMethod(Map parameters) {
+            // Called when the tab is OPENED
+            // - Load initial data
+            // - Subscribe to live updates
+            // - Start background polling
+            loadOrders();
+        }
+
+        @Override
+        protected void exitPointMethod(Map parameters) {
+            // Called when the tab is CLOSED (before @PreDestroy)
+            // - Save draft state
+            // - Cancel background jobs
+            // - Release resources
+            stopPolling();
+        }
+    }
+
+  Note: accessPointMethod is NOT called for tabs that are open on initial page
+  load (those defined in DynTabConfig as initial tabs). It is called only when
+  the user opens a tab by clicking a menu item.
+
+
+================================================================================
+  USE CASE 6: Inter-Tab Communication
+================================================================================
+
+  Tabs can send messages to each other. This does NOT use CDI @Observes (which
+  does not work with @TabScoped beans). Instead, DynTabManager delivers the
+  message directly to each tab bean in its correct scope.
+
+  --- Sending a message ---
+
+    // In OrdersBean - notify all tabs that an order changed
+    sendMessageToAllAppModules(new OrderChangedPayload(orderId));
+
+    // Or target a specific tab by its uniqueIdentifier:
+    sendMessageToAppModule("Inventory", new OrderChangedPayload(orderId));
+
+  --- Receiving a message ---
+
+    @Override
+    protected void onApplicationMessage(String senderId, Object payload) {
+        if (payload instanceof OrderChangedPayload changed) {
+            // React to the change
+            refreshOrder(changed.orderId());
+        }
+    }
+
+  --- Tab lifecycle events (other tabs opening/closing) ---
+
+    @Override
+    protected void onDynTabAdded(DynTabCDIEvent event) {
+        // Another tab was opened
+        log.debug("Tab opened: {}", event.getTabTitle());
+    }
+
+    @Override
+    protected void onDynTabRemoved(DynTabCDIEvent event) {
+        // Another tab was closed
+    }
+
+    @Override
+    protected void onThisTabSelected() {
+        // The user clicked on THIS tab's header - refresh if needed
+        refreshData();
+    }
+
+
+================================================================================
+  USE CASE 7: Workflow - Parent Opens Child, Child Returns a Value
+================================================================================
+
+  A common enterprise pattern: a tab opens a child tab to collect input,
+  the child closes itself and returns a value to the parent.
+
+  --- Parent tab opens the child ---
+
+    public void openSelectCustomerTab() {
+        dynTabManager.launchDynamicTab(
+            "SelectCustomerDynTab",
+            "Select Customer",
+            "/WEB-INF/include/customers/select_customer.xhtml",
+            "SelectCustomer",
+            true,
+            SelectCustomerBean.class,
+            Map.of("callerID", this.getUniqueIdentifier())  // pass caller's ID
+        );
+    }
+
+    @Override
+    protected void onJobFlowReturn(String senderId, Object returnValue) {
+        // Child closed and returned a value
+        Customer selected = (Customer) returnValue;
+        this.selectedCustomer = selected;
+    }
+
+  --- Child tab closes and returns the value ---
+
+    public void confirmSelection() {
+        // Closes this tab, selects the parent tab, and fires onJobFlowReturn()
+        closeAndReturnValueToCaller(selectedCustomer);
+    }
+
+  The "callerID" parameter in parameters is a DynTabs convention that enables
+  the framework to route the return value to the correct parent tab.
+
+
+================================================================================
+  USE CASE 8: View Navigation Within a Tab
+================================================================================
+
+  A single tab can switch between multiple XHTML pages without opening a new tab.
+  Useful for wizard-style flows or master/detail views.
+
+  --- From XHTML ---
+
+    <p:commandButton value="Next"
+        action="#{ordersBean.callViewActivity('/WEB-INF/include/orders/order_step2.xhtml')}"
+        update="mainForm:mainTabView" />
+
+  --- From Java ---
+
+    public void goToStep2() {
+        callViewActivity("/WEB-INF/include/orders/order_step2.xhtml");
+    }
+
+  The tab title and uniqueIdentifier stay the same. Only the included XHTML changes.
+
+
+================================================================================
+  USE CASE 9: Tab Security
+================================================================================
+
+  Two approaches — choose one for your application.
+
+  --- A) Declarative (annotation-based, no database needed) ---
+
+    @DynTab(name             = "AdminPanelDynTab",
+            uniqueIdentifier = "AdminPanel",
+            title            = "Admin Panel",
+            securedResource  = true,
+            allowedRoles     = {"ADMIN"},
+            includePage      = "/WEB-INF/include/admin/admin.xhtml")
+    public class AdminPanelBean extends BaseDyntabCdiBean { ... }
+
+  At deploy time, InMemorySecuredResourceScanner reads the annotation and
+  registers the allowed roles. When a user opens the tab, InMemoryAccessCheckInterceptor
+  checks the roles. If access is denied, the tab shows an error page.
+
+  --- B) DB-based (admin-managed roles) ---
+
+  Implement a custom DBSecuredResourceScanner (extends AbstractSecuredResourceScanner)
+  that writes secured resources to a database table at deploy time, and a
+  DBAccessCheckInterceptor that reads allowed roles from the database at runtime.
+  Roles are managed through an Admin UI instead of annotations.
+
+  With DB-based approach, set securedResource=true in @DynTab but leave
+  allowedRoles empty — access rules live in the database.
+
+
+================================================================================
+  ANNOTATIONS REFERENCE
+================================================================================
+
+  @DynTab
+    Where:      on a class (repeatable)
+    Purpose:    declares a CDI bean as a tab definition
+    Attributes:
+      name                   - tab name, convention: "XxxDynTab"
+      title                  - tab title shown in the header (EL supported)
+      includePage            - path to XHTML page
+      closeable              - user can close the tab (default: true)
+      uniqueIdentifier       - ID for duplicate detection (default: derived from name)
+      parameters             - key=value pairs passed to the bean
+      securedResource        - marks tab as access-controlled (default: false)
+      allowedRoles           - roles that can open the tab (declarative security)
+      securedResourceDisplayName - display name for admin UI
+
+  @TabScoped
+    Where:      on a CDI bean class
+    Purpose:    custom CDI scope - one instance per open tab
+    Lifecycle:  created on first access, destroyed when tab is closed
+
+  DyntabBeanInterface
+    Purpose:    must be implemented by all tab beans
+    Key methods:
+      accessPointMethod(Map) - called on tab open
+      exitPointMethod(Map)   - called on tab close
+      observeDynTabEvent()   - tab lifecycle event receiver
+      observeApplicationEvent() - inter-tab message receiver
+
+  BaseDyntabCdiBean
+    Purpose:    base class with default implementations - extend this
+    Key methods:
+      sendMessageToAppModule(targetId, payload) - send inter-tab message
+      sendMessageToAllAppModules(payload)       - broadcast to all tabs
+      closeAndReturnValueToCaller(value)        - close + return to parent
+      callViewActivity(xhtmlPath)               - navigate within a tab
+      hideWidgetInDynTab(componentId)           - hide PF widget in current tab
+      showWidgetInDynTab(componentId)           - show PF widget in current tab
+
+
+================================================================================
+  PROJECT STRUCTURE
+================================================================================
+
+  dyntabs
+    DynTabManager.java        Central manager - open/close/select tabs
+    DynTabRegistry.java       Registry of tab definitions
+    DynTabTracker.java        Tracks open tabs (session state)
+    DynTab.java               Tab instance model
+    BaseDyntabCdiBean.java    Base class for tab beans
+    DynTabCDIEvent.java       Tab lifecycle event
+    ApplicationCDIEvent.java  Inter-tab communication event
+
+  dyntabs.annotation
+    @DynTab                   Tab definition annotation (repeatable)
+    @DynTabs                  Container for @DynTab repetitions
+    DynTabDiscoveryExtension  CDI Extension for auto-discovery
+
+  dyntabs.scope
+    @TabScoped                Custom CDI scope annotation
+    TabScopeExtension         CDI Extension for scope registration
+    TabScopedContextHolder    ThreadLocal holder for current tab ID
+    TabScopePhaseListener     JSF phase listener (register in faces-config.xml)
+
+
+================================================================================
+  TIPS
+================================================================================
+
+  1. Every tab content XHTML MUST use template="/dyntabs/dynTabLayout.xhtml"
+     and define content inside <ui:define name="mainContent">.
+     Without the template, component IDs will collide between tabs.
+     This is the single most common setup mistake.
+
+     Never add <h:form> inside a tab content page. mainForm.xhtml already
+     wraps all tabs in a single form. Nested forms are invalid HTML and
+     will cause unpredictable JSF/PrimeFaces behavior.
+
+  2. Always extend BaseDyntabCdiBean instead of directly implementing
+     DyntabBeanInterface. It provides sensible defaults for all methods.
+
+  3. Load data in accessPointMethod(), not in @PostConstruct.
+     @PostConstruct runs before the tab parameters are available.
+     accessPointMethod() runs after parameters are set.
+
+  4. Use @TabScoped instead of @ViewScoped for tab beans.
+     @ViewScoped is per-page, not per-tab. Two identical tabs would share
+     the same bean. @TabScoped gives each tab its own isolated instance.
+
+  5. UniqueIdentifier prevents duplicate tabs.
+     If a user tries to open a tab that is already open (same uniqueIdentifier),
+     DynTabs selects the existing tab instead of opening a duplicate.
+     Use dynamic uniqueIdentifiers for tabs that CAN have multiple instances:
+       uniqueIdentifier = "Product_" + productId
+
+  6. Keep accessPointMethod() fast.
+     It runs synchronously while opening the tab. For heavy operations,
+     load data lazily or use PrimeFaces <p:blockUI> with async loading.
+
+  7. Inter-tab messaging does NOT use CDI @Observes.
+     CDI cannot deliver events to @TabScoped beans in other tabs correctly.
+     Use sendMessageToAppModule() / onApplicationMessage() instead.
+     This is a design decision, not a limitation.
+
+  8. For navigation between multiple views in one tab, use callViewActivity().
+     This changes the includePage of the current tab without touching other tabs.
+
+  9. To open a tab programmatically (from code), inject DynTabManager:
+       @Inject private DynTabManager dynTabManager;
+       dynTabManager.launchTab("Users");          // by registered name
+       dynTabManager.launchDynamicTab(...);       // with full parameters

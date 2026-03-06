@@ -1,0 +1,727 @@
+================================================================================
+  EasyAI - Developer Guide
+  A simple Java API for adding AI to your application
+================================================================================
+
+  What is EasyAI?
+  ---------------
+  EasyAI is an abstraction layer over LangChain4J. It hides all the low-level
+  complexity behind a simple builder-pattern API. You don't need to know anything
+  about ChatLanguageModel, AiServices, ToolSpecification, or EmbeddingStore.
+
+  You just need to know 3 things:
+    1. EasyAI.chat()       - for simple conversations
+    2. EasyAI.assistant()  - for smart assistants that can call your Java code
+    3. @EasyRAG            - for AI that answers questions from your documents
+
+
+================================================================================
+  SETUP (5 minutes)
+================================================================================
+
+  Step 1: Maven (already configured in pom.xml)
+  ------------------------------------------------
+  The following dependencies are included:
+    - langchain4j           (core AI services)
+    - langchain4j-open-ai   (OpenAI provider)
+    - langchain4j-easy-rag   (document processing for RAG)
+
+  Step 2: Configuration
+  ------------------------------------------------
+  Create src/main/resources/easyai.properties in your application:
+
+    easyai.provider=openai
+    easyai.api-key=sk-YOUR-OPENAI-API-KEY
+    easyai.model-name=gpt-4o-mini
+
+  Maven packages src/main/resources/ into WEB-INF/classes/ inside your WAR,
+  where EasyAI picks it up from the classpath automatically.
+
+  That's it. You're ready to use EasyAI.
+
+  Alternative: Use local Ollama (free, no API key needed)
+  ------------------------------------------------
+    1. Install Ollama from https://ollama.ai
+    2. Run: ollama pull llama3
+    3. In src/main/resources/easyai.properties:
+         easyai.provider=ollama
+         easyai.model-name=llama3
+
+
+================================================================================
+  USE CASE 1: Simple Chat
+================================================================================
+
+  The simplest way to talk to AI. Send a message, get a response.
+
+  --- Minimal Example ---
+
+    Conversation chat = EasyAI.chat().build();
+    String answer = chat.send("What is the capital of France?");
+    System.out.println(answer);
+    // Output: "The capital of France is Paris."
+
+  --- With Memory (AI Remembers Previous Messages) ---
+
+    Conversation chat = EasyAI.chat()
+        .withMemory(20)    // remember last 20 messages
+        .build();
+
+    chat.send("My name is John");
+    String answer = chat.send("What is my name?");
+    // answer: "Your name is John."
+
+  --- With a System Message (Set AI Personality) ---
+
+    Conversation chat = EasyAI.chat()
+        .withMemory(20)
+        .withSystemMessage("You are a friendly Java tutor. "
+            + "Explain concepts simply with code examples.")
+        .build();
+
+    String answer = chat.send("What is a HashMap?");
+    // AI responds as a Java tutor with examples
+
+  --- Override Config Per-Conversation ---
+
+    Conversation chat = EasyAI.chat()
+        .withProvider("ollama")
+        .withModel("llama3")
+        .withBaseUrl("http://localhost:11434/v1/")
+        .withTemperature(0.3)   // less creative, more precise
+        .withMaxTokens(500)     // shorter answers
+        .withMemory(10)
+        .build();
+
+
+================================================================================
+  USE CASE 2: AI Assistant (Interface-Based)
+================================================================================
+
+  Define a Java interface. EasyAI creates an AI implementation at runtime.
+
+  --- Step 1: Define the Interface ---
+
+    @EasyAIAssistant(systemMessage = "You are a helpful code reviewer")
+    public interface CodeReviewer {
+        String review(String code);
+    }
+
+  --- Step 2: Build and Use ---
+
+    CodeReviewer reviewer = EasyAI.assistant(CodeReviewer.class).build();
+
+    String feedback = reviewer.review(
+        "public void processData(List data) {\n"
+      + "    for (int i = 0; i < data.size(); i++) {\n"
+      + "        System.out.println(data.get(i));\n"
+      + "    }\n"
+      + "}"
+    );
+    // AI reviews the code and gives feedback
+
+
+================================================================================
+  USE CASE 3: AI Assistant with Tools (AI Calls Your Java Methods)
+================================================================================
+
+  This is the most powerful feature. You give the AI access to your existing
+  Java services, and it decides when to call them based on the user's question.
+
+  YOUR SERVICE CLASSES DON'T NEED ANY AI ANNOTATIONS. They are plain Java.
+
+  --- Step 1: Your Existing Service (plain POJO/EJB) ---
+
+    public class OrderService {
+
+        public String findOrder(String orderId) {
+            // your existing database logic
+            return "Order " + orderId + ": shipped, arrives tomorrow";
+        }
+
+        public String cancelOrder(String orderId) {
+            // your existing logic
+            return "Order " + orderId + " has been cancelled";
+        }
+
+        public List<String> getOrdersByCustomer(String email) {
+            // your existing logic
+            return List.of("ORD-001", "ORD-002", "ORD-003");
+        }
+    }
+
+  --- Step 2: Define the Assistant Interface ---
+
+    @EasyAIAssistant(systemMessage = "You are an e-commerce support bot. "
+        + "Help customers with their orders.")
+    public interface SupportBot {
+        String ask(String question);
+    }
+
+  --- Step 3: Wire Them Together ---
+
+    OrderService orderService = new OrderService();
+    UserService userService = new UserService();
+
+    SupportBot bot = EasyAI.assistant(SupportBot.class)
+        .withTools(orderService, userService)   // pass any number of services
+        .build();
+
+  --- Step 4: Use It ---
+
+    String answer = bot.ask("Where is my order #12345?");
+    // Behind the scenes:
+    //   1. AI reads the question
+    //   2. AI decides to call orderService.findOrder("12345")
+    //   3. AI gets the result from your method
+    //   4. AI formats a nice response for the user
+
+    answer = bot.ask("Cancel order #12345");
+    // AI calls orderService.cancelOrder("12345") automatically
+
+    answer = bot.ask("Show me all orders for john@example.com");
+    // AI calls orderService.getOrdersByCustomer("john@example.com")
+
+
+  --- Optional: Add @EasyTool for Better Descriptions ---
+
+  If the AI is picking the wrong method, add @EasyTool to help it:
+
+    public class OrderService {
+
+        @EasyTool("Finds an order by its ID and returns its current status")
+        public String findOrder(String orderId) { ... }
+
+        @EasyTool("Cancels an active order. Only works for unshipped orders.")
+        public String cancelOrder(String orderId) { ... }
+    }
+
+  Note: @EasyTool is optional. Without it, the AI uses the method name
+  as the description. It works fine in most cases.
+
+
+================================================================================
+  USE CASE 4: Document-Powered AI (RAG)
+================================================================================
+
+  Let the AI answer questions based on your PDF, DOCX, or TXT files.
+  The AI reads your documents and gives answers based on their content.
+
+  There are three ways to provide documents, depending on where they come from:
+
+    A) @EasyRAG annotation     - for static files on classpath or disk
+    B) .withRAG(path...)       - for file paths known at runtime
+    C) .withRAG(DocumentSource...) - for content loaded as byte[] from
+                                     a DMS, database, REST API, or upload
+
+  Supported formats: PDF, DOCX, DOC, PPTX, TXT, HTML (via Apache Tika).
+
+
+  --- A) @EasyRAG Annotation (Static Files) ---
+
+  Best for: documents packaged with your app that don't change at runtime.
+
+  Step 1: Place your document on the classpath.
+  Put your file (e.g., company-policy.pdf) in:
+    src/main/resources/     (standard Maven — Maven packages it into WEB-INF/classes/)
+
+  Step 2: Define the interface with @EasyRAG.
+
+    @EasyRAG(source = "classpath:company-policy.pdf")
+    @EasyAIAssistant(systemMessage = "Answer based on the company policy")
+    public interface PolicyBot {
+        String ask(String question);
+    }
+
+  Step 3: Build and use.
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class).build();
+
+    String answer = bot.ask("How many vacation days do employees get?");
+    // AI searches the PDF and answers based on the actual content
+
+  Multiple documents:
+
+    @EasyRAG(source = {
+        "classpath:docs/installation-guide.pdf",
+        "classpath:docs/user-manual.pdf",
+        "classpath:docs/faq.txt"
+    })
+    @EasyAIAssistant(systemMessage = "Help users with product documentation")
+    public interface HelpDeskBot {
+        String ask(String question);
+    }
+
+  Loading from file system:
+
+    @EasyRAG(source = "file:C:/data/contracts/terms.pdf")
+
+  Tuning RAG:
+
+    @EasyRAG(
+        source = "classpath:manual.pdf",
+        maxResults = 5,     // include top 5 relevant segments (default: 3)
+        minScore = 0.7      // only highly relevant segments (default: 0.5)
+    )
+
+
+  --- B) .withRAG(path...) (File Paths at Runtime) ---
+
+  Best for: documents on disk whose paths come from configuration,
+  servlet context, or are determined at runtime.
+
+    // Path from application config, database, or servlet context
+    String docPath = servletContext.getRealPath("/WEB-INF/docs/policy.pdf");
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(docPath)
+        .build();
+
+  Multiple documents:
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(
+            "file:C:/app-data/docs/policy.pdf",
+            "file:C:/app-data/docs/faq.pdf"
+        )
+        .build();
+
+  With tuning parameters:
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(
+            new String[]{docPath1, docPath2},
+            5,     // maxResults: top 5 relevant segments
+            0.7    // minScore: 70%+ relevance only
+        )
+        .build();
+
+
+  --- C) .withRAG(DocumentSource...) (Bytes from DMS / Database / API) ---
+
+  Best for: enterprise applications where documents are stored in a DMS,
+  database (BLOB), or fetched via REST API. The content arrives as byte[],
+  not as a file on disk. This is the most common scenario in real-world
+  web applications.
+
+  The key class is DocumentSource, which wraps byte[] content with a file name.
+  The file name extension (.pdf, .docx, .txt) tells the parser how to read it.
+
+  Creating a DocumentSource:
+    DocumentSource.of("name.pdf", byteArray)      - from raw bytes
+    DocumentSource.ofText("name", stringContent)   - from plain text
+
+  Example: Document from a DMS:
+
+    byte[] pdfBytes = dmsClient.downloadDocument("DOC-12345");
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(DocumentSource.of("policy.pdf", pdfBytes))
+        .build();
+
+    bot.ask("What is the refund policy?");
+
+  Example: Document from a database BLOB:
+
+    byte[] content = resultSet.getBytes("document_content");
+    String fileName = resultSet.getString("file_name");   // e.g. "terms.pdf"
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(DocumentSource.of(fileName, content))
+        .build();
+
+  Example: Plain text (no file needed at all):
+
+    String rulesText = configService.loadBusinessRules();
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(DocumentSource.ofText("rules", rulesText))
+        .build();
+
+  Example: Multiple documents from different sources:
+
+    DocumentSource fromDms   = DocumentSource.of("policy.pdf",
+                                   dmsClient.download("policy"));
+    DocumentSource fromDb    = DocumentSource.of("terms.docx",
+                                   resultSet.getBytes("doc_content"));
+    DocumentSource fromText  = DocumentSource.ofText("extra-rules",
+                                   "Additional rules: no remote work on Fridays.");
+    DocumentSource fromApi   = DocumentSource.of("faq.pdf",
+                                   restClient.get("/api/docs/faq").body());
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(fromDms, fromDb, fromText, fromApi)
+        .build();
+
+  With tuning parameters:
+
+    PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+        .withRAG(
+            List.of(fromDms, fromDb),
+            5,     // maxResults: top 5 relevant segments
+            0.7    // minScore: 70%+ relevance only
+        )
+        .build();
+
+
+  --- Which approach should I use? ---
+
+    Source of documents               Use this
+    --------------------------------  ----------------------------------
+    Static files in your project      @EasyRAG annotation
+    Files on disk, path from config   .withRAG("file:...")
+    DMS (Alfresco, SharePoint, ...)   .withRAG(DocumentSource.of(...))
+    Database BLOB                     .withRAG(DocumentSource.of(...))
+    REST API response                 .withRAG(DocumentSource.of(...))
+    User-uploaded file (byte[])       .withRAG(DocumentSource.of(...))
+    Plain text / String               .withRAG(DocumentSource.ofText(...))
+
+
+================================================================================
+  USE CASE 5: Jakarta EJB Beans as Tools
+================================================================================
+
+  EasyAI fully supports Jakarta EJB beans (@Stateless, @Stateful, @Singleton)
+  as tool objects. If you inject an EJB via @Inject and pass it to withTools(),
+  everything works automatically - EasyAI detects the EJB proxy and discovers
+  the business methods from the actual bean class.
+
+  The method calls still go through the EJB proxy, so container services
+  (transactions, security, interceptors) work exactly as they would normally.
+
+  --- Example: @Stateless EJB as a Tool ---
+
+    @Stateless
+    public class OrderService {
+
+        @PersistenceContext
+        private EntityManager em;
+
+        public String findOrder(String orderId) {
+            Order order = em.find(Order.class, orderId);
+            return order != null ? order.toString() : "Order not found";
+        }
+
+        public String cancelOrder(String orderId) {
+            // runs inside a JTA transaction automatically
+            Order order = em.find(Order.class, orderId);
+            order.setStatus("CANCELLED");
+            return "Order " + orderId + " cancelled";
+        }
+    }
+
+    @EasyAIAssistant(systemMessage = "You are an e-commerce support bot")
+    public interface SupportBot {
+        String ask(String question);
+    }
+
+    // In your CDI bean / JSF controller / REST endpoint:
+    @Inject OrderService orderService;     // EJB proxy from CDI container
+
+    SupportBot bot = EasyAI.assistant(SupportBot.class)
+        .withTools(orderService)           // just pass the injected proxy
+        .build();
+
+    bot.ask("Cancel my order #12345");
+    // AI calls orderService.cancelOrder("12345") through the EJB proxy
+    // -> transaction is managed by the container, just like a normal EJB call
+
+  --- Example: @Singleton Cache + @Stateless Service Together ---
+
+    @Singleton
+    public class CacheService {
+        private final Map<String, String> cache = new ConcurrentHashMap<>();
+
+        public String getCachedValue(String key) {
+            return cache.getOrDefault(key, "not found");
+        }
+    }
+
+    @Stateless
+    public class ReportService {
+
+        public String generateReport(String reportType) {
+            // heavy transactional work...
+            return "Report: ...";
+        }
+    }
+
+    // Inject both EJBs
+    @Inject CacheService cacheService;
+    @Inject ReportService reportService;
+
+    SupportBot bot = EasyAI.assistant(SupportBot.class)
+        .withTools(cacheService, reportService)   // mix different EJB types
+        .build();
+
+  --- Example: @Stateful Shopping Cart ---
+
+    @Stateful
+    public class CartService {
+
+        private final List<String> items = new ArrayList<>();
+
+        public String addItem(String itemName) {
+            items.add(itemName);
+            return "Added " + itemName + ". Cart has " + items.size() + " items.";
+        }
+
+        public String getCartContents() {
+            return "Cart: " + String.join(", ", items);
+        }
+    }
+
+    @Inject CartService cartService;
+
+    ShoppingBot bot = EasyAI.assistant(ShoppingBot.class)
+        .withTools(cartService)
+        .build();
+
+    bot.ask("Add a blue t-shirt to my cart");
+    bot.ask("What's in my cart?");
+
+  --- Key Points ---
+
+    - All three EJB types are supported: @Stateless, @Stateful, @Singleton
+    - Just inject via @Inject and pass to withTools() - nothing else needed
+    - Transactions, security, and interceptors work normally (calls go
+      through the container proxy)
+    - You can mix EJBs with plain POJOs in the same withTools() call
+    - No special annotations, no JNDI lookup, no extra configuration
+
+
+================================================================================
+  USE CASE 6: Combined - Tools + RAG
+================================================================================
+
+  You can combine tools (including EJB beans) AND documents on the same assistant.
+
+  With annotation:
+
+    @EasyRAG(source = "classpath:product-catalog.pdf")
+    @EasyAIAssistant(systemMessage = "You are a sales assistant. "
+        + "Use the product catalog for information and the inventory "
+        + "service to check stock.")
+    public interface SalesBot {
+        String ask(String question);
+    }
+
+    SalesBot bot = EasyAI.assistant(SalesBot.class)
+        .withTools(inventoryService, pricingService)
+        .build();
+
+    bot.ask("Is the XYZ laptop in stock and what does it cost?");
+    // AI reads the product catalog AND calls inventoryService.checkStock()
+
+  With DocumentSource (e.g. catalog from DMS + live inventory service):
+
+    byte[] catalogBytes = dmsClient.download("product-catalog");
+
+    SalesBot bot = EasyAI.assistant(SalesBot.class)
+        .withRAG(DocumentSource.of("catalog.pdf", catalogBytes))
+        .withTools(inventoryService, pricingService)
+        .build();
+
+
+================================================================================
+  USE CASE 7: CDI / Jakarta EE Integration
+================================================================================
+
+  In a Jakarta EE application (GlassFish, WildFly, Payara, etc.),
+  assistants annotated with @EasyAIAssistant are automatically injectable.
+  The CDI extension (EasyAIExtension) creates one ApplicationScoped instance
+  per assistant interface.
+
+
+  --- A) Simple injection (no tools) ---
+
+    @EasyAIAssistant(systemMessage = "You are a helpful Java tutor")
+    public interface JavaTutor {
+        String ask(String question);
+    }
+
+    // Just inject - no build() needed!
+    @Inject JavaTutor tutor;
+
+    public String handleQuestion(String userQuestion) {
+        return tutor.ask(userQuestion);
+    }
+
+
+  --- B) Injection with auto-wired tools ---
+
+  Declare which CDI/EJB beans should be wired as tools directly in the
+  annotation. The CDI extension resolves their live instances automatically.
+  No manual withTools() call needed.
+
+    @EasyAIAssistant(
+        systemMessage = "You are an e-commerce support bot",
+        tools = {OrderService.class, InventoryService.class}
+    )
+    public interface SupportBot {
+        String ask(String question);
+    }
+
+    // OrderService and InventoryService are resolved from the CDI container
+    // and wired as tools automatically - equivalent to:
+    //   EasyAI.assistant(SupportBot.class)
+    //       .withTools(orderService, inventoryService)
+    //       .build();
+    @Inject SupportBot bot;
+
+    public String handleQuestion(String userQuestion) {
+        return bot.ask(userQuestion);
+    }
+
+  Works with all CDI/EJB bean types:
+    tools = {OrderService.class}               // @Stateless EJB
+    tools = {CartService.class}                // @Stateful EJB
+    tools = {CacheService.class}               // @Singleton EJB
+    tools = {MyAppScopedBean.class}            // @ApplicationScoped CDI bean
+    tools = {OrderService.class, CacheService.class}  // mix of types
+
+
+  --- C) When to use @Inject vs. manual build() ---
+
+    Scenario                                Use
+    ------------------------------------    ----------------------------------
+    Simple assistant, no tools              @Inject (annotation only)
+    Tools known at compile time             @Inject + tools = {...} attribute
+    Tools or config change at runtime       EasyAI.assistant(...).withTools(...).build()
+    RAG with byte[] from DMS/DB/API         EasyAI.assistant(...).withRAG(...).build()
+    Testing with mock model                 EasyAI.assistant(...).withChatLanguageModel(mock).build()
+
+
+================================================================================
+  CONFIGURATION REFERENCE
+================================================================================
+
+  File: easyai.properties (on classpath)
+
+  Property               Description                    Default
+  ---------------------  -----------------------------  -----------
+  easyai.provider        AI provider                    openai
+  easyai.api-key         API key                        (none)
+  easyai.model-name      Model name                     (provider default)
+  easyai.base-url        Custom API endpoint            (provider default)
+  easyai.temperature     Creativity (0.0 to 1.0)        (provider default)
+  easyai.max-tokens      Max response length             (provider default)
+
+  Supported providers:
+    openai  - OpenAI (GPT-4o, GPT-4o-mini, etc.)
+    ollama  - Local Ollama (Llama3, Mistral, etc.)
+
+  Programmatic override (takes precedence over properties file):
+
+    EasyAI.configure(EasyAIConfig.builder()
+        .provider("openai")
+        .apiKey("sk-...")
+        .modelName("gpt-4o")
+        .temperature(0.7)
+        .maxTokens(2000)
+        .build());
+
+
+================================================================================
+  ANNOTATIONS REFERENCE
+================================================================================
+
+  @EasyAIAssistant
+    Where:    on an interface
+    Purpose:  marks it as an AI assistant
+    Attribute: systemMessage (optional) - defines AI personality
+
+  @EasyTool
+    Where:    on a public method (in your service class)
+    Purpose:  adds a description to help the AI understand the method
+    Note:     OPTIONAL - methods work without it
+
+  @EasyRAG
+    Where:    on an interface (alongside @EasyAIAssistant)
+    Purpose:  loads documents for document-powered AI (static paths)
+    Attributes:
+      source     - file paths (classpath: or file: prefix)
+      maxResults - how many segments to retrieve (default 3)
+      minScore   - minimum relevance threshold (default 0.5)
+    Alternative: use .withRAG(DocumentSource...) for byte[] content
+
+
+================================================================================
+  PROJECT STRUCTURE
+================================================================================
+
+  dyntabs.ai
+    EasyAI.java                 Main entry point
+    EasyAIConfig.java           Configuration object
+    EasyAIConfigLoader.java     Loads from easyai.properties
+    ModelFactory.java           Creates AI model (OpenAI/Ollama)
+    Conversation.java           Chat wrapper with send() method
+    ConversationBuilder.java    Builder for Conversation
+    AssistantBuilder.java       Builder for AI assistants
+
+  dyntabs.ai.annotation
+    @EasyAIAssistant            Marks assistant interfaces
+    @EasyTool                   Optional tool method description
+    @EasyRAG                    Document-powered AI (RAG)
+
+  dyntabs.ai.assistant
+    ToolIntrospector.java       Auto-discovers methods via reflection
+    ToolMethod.java             Internal record (spec + method)
+
+  dyntabs.ai.rag
+    RagEngine.java              Document loading, embedding, retrieval
+    DocumentSource.java         Wraps byte[] content for RAG from DMS/DB/API
+
+  dyntabs.ai.cdi
+    EasyAIExtension.java        CDI Extension for @Inject support
+
+
+================================================================================
+  TIPS
+================================================================================
+
+  1. Start simple. Use EasyAI.chat() first to verify your API key works.
+
+  2. System messages matter. A good system message dramatically improves results.
+     Be specific: "You are a customer support agent for Acme Corp. Be concise."
+
+  3. Tool methods should return Strings. The AI works best when your methods
+     return human-readable strings. If your method returns an object,
+     make sure it has a good toString().
+
+  4. Memory size depends on use case. For quick Q&A, 10 is enough.
+     For long conversations, use 30-50. More memory = higher API cost.
+
+  5. For testing, use withChatLanguageModel() to inject a mock:
+       Conversation chat = EasyAI.chat()
+           .withChatLanguageModel(mockModel)
+           .build();
+
+  6. Temperature guide:
+       0.0 = factual, deterministic (good for data lookups)
+       0.3 = mostly factual with slight variation
+       0.7 = balanced (good default for conversation)
+       1.0 = creative (good for brainstorming, stories)
+
+  7. Always wrap bot.ask() and chat.send() in try-catch in production code.
+     AI calls can fail (network issues, rate limits, bad model output). Use
+     EasyAI.extractErrorMessage(e) to get a clean, readable message instead
+     of raw JSON from the provider:
+
+       try {
+           return bot.ask(userQuestion);
+       } catch (Exception e) {
+           log.error("AI call failed", e);
+           return "Sorry, something went wrong: " + EasyAI.extractErrorMessage(e);
+       }
+
+     EasyAI.extractErrorMessage() parses the JSON error format used by
+     OpenAI-compatible providers (OpenAI, Groq, Azure OpenAI) and extracts
+     only the human-readable "message" field. For plain-text error messages
+     (Ollama, network errors), it returns the message as-is.
+
+     Common LangChain4J exceptions to catch separately if needed:
+       dev.langchain4j.exception.AuthenticationException  - wrong API key
+       dev.langchain4j.exception.RateLimitException       - rate limit exceeded
+       dev.langchain4j.exception.InvalidRequestException  - bad request / tool call failure
+       dev.langchain4j.exception.InternalServerException  - provider server error

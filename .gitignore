@@ -1,0 +1,15 @@
+# Build output
+target/
+
+# Maven local repo cache
+.m2/
+
+# Eclipse project files
+.classpath
+.project
+.settings/
+
+# OS artifacts
+nul
+.DS_Store
+Thumbs.db

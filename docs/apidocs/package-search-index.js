@@ -1,0 +1,1 @@
+packageSearchIndex = [{"l":"All Packages","u":"allpackages-index.html"},{"l":"dyntabs"},{"l":"dyntabs.ai"},{"l":"dyntabs.ai.annotation"},{"l":"dyntabs.ai.assistant"},{"l":"dyntabs.ai.cdi"},{"l":"dyntabs.ai.rag"},{"l":"dyntabs.annotation"},{"l":"dyntabs.interfaces"},{"l":"dyntabs.scope"},{"l":"model"},{"l":"security"}];updateSearchResults();

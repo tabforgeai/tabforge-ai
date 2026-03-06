@@ -1,0 +1,3 @@
+dyntabs.scope.TabScopeExtension
+dyntabs.annotation.DynTabDiscoveryExtension
+dyntabs.ai.cdi.EasyAIExtension
