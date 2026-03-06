@@ -172,7 +172,7 @@ Then follow the setup guides — DynTabs takes 6 steps (faces-config, template i
 
 - [EasyAI Developer Guide](docs/easyai_guide.txt) — full API reference, all use cases, configuration, tips
 - [DynTabs Developer Guide](docs/dyntabs_guide.txt) — setup, all use cases, annotations reference, tips
-- [JavaDoc](docs/apidocs/index.html) — API reference (also available at `https://javadoc.io/doc/io.github.tabforgeai/tabforge-ai` after Maven Central release)
+- [JavaDoc](docs/apidocs/index.html) — API reference (also available at `https://javadoc.io/doc/io.github.tabforgeai/tabforge-ai`)
 
 ---
 
