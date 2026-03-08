@@ -1,5 +1,7 @@
 # TabForge AI
 
+![TabForge AI](docs/images/TabForge_AI_Logo_128_128_transparent.png)
+
 **Dynamic tabs and AI for Jakarta EE applications — without the boilerplate.**
 
 TabForge AI is a Jakarta EE library with two independent modules:
