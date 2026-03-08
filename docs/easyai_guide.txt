@@ -3,6 +3,10 @@
   A simple Java API for adding AI to your application
 ================================================================================
 
+  Demo Application
+  ----------------
+  A working example is available at: https://github.com/tabforgeai/tabforge-ai-demo
+
   What is EasyAI?
   ---------------
   EasyAI is an abstraction layer over LangChain4J. It hides all the low-level
