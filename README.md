@@ -124,6 +124,23 @@ bot.ask("How many vacation days do employees get?");
 
 ---
 
+## EasyAI vs LangChain4J-CDI
+
+| | EasyAI (TabForge AI) | LangChain4J-CDI |
+|---|---|---|
+| **Target runtime** | Pure Jakarta EE (CDI, EJB, GlassFish, Payara, WildFly) | Jakarta EE + MicroProfile (Quarkus, Helidon, WildFly, Payara) |
+| **LangChain4J API exposure** | Fully hidden — no LangChain4J knowledge required | Partially exposed — still uses LangChain4J annotations and concepts |
+| **Tool registration** | Zero annotations — pass any POJO or EJB directly to `.withTools()` | `@Tool` annotation required on every tool method |
+| **EJB bean as tool** | Built-in — `@Stateless`, `@Stateful`, `@Singleton` work transparently, container services preserved | Not explicitly supported |
+| **Assistant injection** | `@Inject` into any CDI bean | `@Inject` into any CDI bean |
+| **RAG** | `@EasyRAG` annotation — classpath, file, or `byte[]` | Via configuration properties |
+| **Configuration** | Simple `easyai.properties` | Verbose property pattern: `dev.langchain4j.cdi.plugin.<name>.class=...` |
+| **Simple chat (no assistant)** | `EasyAI.chat().build()` — one line | Not directly supported |
+| **MicroProfile Fault Tolerance** | Not included | `@Retry`, `@Timeout`, `@CircuitBreaker` |
+| **Observability** | Not included | MicroProfile Telemetry integration |
+
+---
+
 ## Why Not Spring AI?
 
 | | DynTabs / EasyAI | Spring AI |
