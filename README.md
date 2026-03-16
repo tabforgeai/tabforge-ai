@@ -152,6 +152,10 @@ bot.ask("How many vacation days do employees get?");
 | AI config | `easyai.properties` + `EasyAI.configure()` | `application.properties` + Spring beans |
 | RAG from byte[] | `DocumentSource.of("name.pdf", bytes)` | Custom `DocumentReader` implementation |
 | CDI injection | `@Inject SupportBot bot` | `@Autowired` (Spring only) |
+| Multi-step agent | `EasyAI.agent()` — built-in, one line | Manual loop + custom orchestration code |
+| Agent step limit | `withMaxSteps(n)` — built-in safety guard | No built-in limit |
+| Agent execution trace | `withStepListener()` — callback per tool call | Debug logging only, no programmatic hook |
+| Agent planning prompt | `withPlanningPrompt(true)` — built-in | Not provided |
 
 EasyAI also works outside Jakarta EE (plain Java, unit tests) — just call `.build()` directly.
 
