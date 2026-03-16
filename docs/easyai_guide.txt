@@ -13,10 +13,11 @@
   complexity behind a simple builder-pattern API. You don't need to know anything
   about ChatLanguageModel, AiServices, ToolSpecification, or EmbeddingStore.
 
-  You just need to know 3 things:
+  You just need to know 4 things:
     1. EasyAI.chat()       - for simple conversations
     2. EasyAI.assistant()  - for smart assistants that can call your Java code
     3. @EasyRAG            - for AI that answers questions from your documents
+    4. EasyAI.agent()      - for autonomous multi-step task execution
 
 
 ================================================================================
@@ -597,6 +598,132 @@
 
 
 ================================================================================
+  USE CASE 8: EasyAgent (Autonomous Multi-Step Task Execution)
+================================================================================
+
+  An EasyAgent goes beyond a single question-and-answer. You give it a complex
+  task in natural language, and it autonomously plans which service methods to
+  call, executes them in the right order, uses the result of each step to
+  decide what to do next, and adapts if a step fails.
+
+  You don't write any orchestration code. The agent plans and executes at
+  runtime.
+
+  --- Key Concepts ---
+
+    withServices()       - registers your Java services (same as withTools()
+                           in AssistantBuilder, but semantically clearer)
+    withMaxSteps(n)      - caps the number of service calls per task execution
+                           (strongly recommended — default is 10)
+    withPlanningPrompt() - injects a built-in system message that instructs
+                           the LLM to think step by step before acting
+    withStepListener()   - callback invoked after each service call, giving you
+                           full visibility into what the agent did
+
+  --- Minimal Example ---
+
+    EasyAgent agent = EasyAI.agent()
+        .withServices(inventoryService, orderService)
+        .withMaxSteps(10)
+        .build();
+
+    String result = agent.execute("Order 2 laptops for user U123.");
+
+  --- Full Example with Planning and Trace ---
+
+    @Inject InventoryService inventoryService;
+    @Inject PaymentService   paymentService;
+    @Inject OrderService     orderService;
+    @Inject ShippingService  shippingService;
+
+    EasyAgent agent = EasyAI.agent()
+        .withServices(inventoryService, paymentService, orderService, shippingService)
+        .withMaxSteps(10)
+        .withPlanningPrompt(true)
+        .withStepListener(step ->
+            log.info("[AGENT] Step {}: {}({}) -> {}",
+                step.stepNumber(), step.toolName(),
+                step.arguments(),  step.result()))
+        .build();
+
+    String result = agent.execute(
+        "Order 2 laptops for user U123, apply loyalty credit, " +
+        "deliver to Belgrade. If out of stock, use warehouse WH-EU."
+    );
+
+  What the agent executes autonomously:
+    Step 1: inventoryService.checkStock("laptop", 2)              -> false
+    Step 2: inventoryService.getFromWarehouse("laptop", 2, "WH-EU") -> "reserved:REF-88"
+    Step 3: paymentService.applyLoyaltyCredit("U123")             -> 150.0
+    Step 4: paymentService.processPayment(850.0, "loyalty+card")  -> "PAY-991"
+    Step 5: orderService.createOrder("laptop x2", "REF-88", "PAY-991") -> "ORD-441"
+    Step 6: shippingService.scheduleDelivery("ORD-441", "Belgrade") -> "delivery scheduled"
+
+  None of this flow was coded manually. The agent adapted (used fallback
+  warehouse when stock was unavailable) entirely on its own.
+
+  --- Step Listener ---
+
+  The StepListener receives an AgentStep record after each tool call:
+
+    step.stepNumber()  - sequence number starting from 1
+    step.toolName()    - name of the service method that was called
+    step.arguments()   - JSON string of arguments passed to the method
+    step.result()      - string result returned by the method
+
+  When a tool throws an exception, the result is a structured error message
+  that the agent can interpret:
+    "TOOL_ERROR | tool=checkStock | error=DB timeout | suggestion=Try a different approach..."
+
+  --- Max Steps Limit ---
+
+  withMaxSteps(n) is strongly recommended. When the step limit is reached,
+  the agent receives:
+    "MAX_STEPS_REACHED: You have reached the maximum of N tool calls allowed.
+     Please provide a final answer based on the information gathered so far."
+  The agent then returns a final answer without further tool calls.
+
+  Without this limit, a complex task could trigger many sequential calls,
+  significantly increasing token usage and cost.
+
+  --- withPlanningPrompt(true) ---
+
+  Injects this system message (prepended to any custom system message):
+    "You are a planning agent. When given a complex task:
+     1. Think step by step and identify which tools to call and in what order.
+     2. Execute the steps sequentially.
+     3. Use the result of each step to inform the next decision.
+     4. If a step fails, adjust your plan and try an alternative approach.
+     5. Once done, provide a clear final answer."
+
+  Improves reliability for complex tasks with conditional branching.
+
+  --- EasyAgent vs. EasyAI.assistant() ---
+
+    Scenario                                Use
+    ------------------------------------    ----------------------------------
+    Single question, structured answer      EasyAI.assistant()
+    Multi-step task, autonomous execution   EasyAI.agent()
+    Workflow with conditional branching     EasyAI.agent()
+    Known fixed sequence of calls           EasyAI.assistant() or manual code
+
+  --- Important Notes ---
+
+  1. Transactions: EasyAgent does not manage transactions across steps.
+     If the agent calls payment.process() and then fails on the next step,
+     the payment will not be rolled back. Design your services to be
+     idempotent or provide compensating transactions where needed.
+
+  2. Determinism: the LLM may make different decisions for the same input.
+     Do not use EasyAgent for financial transactions without a human-in-the-loop
+     confirmation step.
+
+  3. Token cost: each tool call adds tokens to the conversation. With 10 steps
+     and GPT-4o, one agent.execute() can cost significantly more than one
+     bot.ask(). Monitor usage accordingly.
+
+
+================================================================================
   CONFIGURATION REFERENCE
 ================================================================================
 
@@ -655,13 +782,19 @@
 ================================================================================
 
   dyntabs.ai
-    EasyAI.java                 Main entry point
+    EasyAI.java                 Main entry point (chat / assistant / agent)
     EasyAIConfig.java           Configuration object
     EasyAIConfigLoader.java     Loads from easyai.properties
     ModelFactory.java           Creates AI model (OpenAI/Ollama)
     Conversation.java           Chat wrapper with send() method
     ConversationBuilder.java    Builder for Conversation
     AssistantBuilder.java       Builder for AI assistants
+    EasyAgent.java              Agent with execute(task) method
+    AgentBuilder.java           Builder for EasyAgent
+
+  dyntabs.ai.agent
+    AgentStep.java              Record: stepNumber, toolName, arguments, result
+    StepListener.java           @FunctionalInterface - callback per tool call
 
   dyntabs.ai.annotation
     @EasyAIAssistant            Marks assistant interfaces
@@ -707,7 +840,11 @@
        0.7 = balanced (good default for conversation)
        1.0 = creative (good for brainstorming, stories)
 
-  7. Always wrap bot.ask() and chat.send() in try-catch in production code.
+  7. EasyAgent tip: always use withStepListener() during development.
+     Without it, tool calls are a black box — you won't know what the agent
+     called, with what arguments, or what it got back. Log every step.
+
+  8. Always wrap bot.ask(), chat.send(), and agent.execute() in try-catch in production code.
      AI calls can fail (network issues, rate limits, bad model output). Use
      EasyAI.extractErrorMessage(e) to get a clean, readable message instead
      of raw JSON from the provider:
