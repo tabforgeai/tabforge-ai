@@ -13,3 +13,6 @@ target/
 nul
 .DS_Store
 Thumbs.db
+
+# Internal planning documents
+Multi_Tool_Planning_Orchestration.txt

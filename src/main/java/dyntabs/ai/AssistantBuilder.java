@@ -340,6 +340,9 @@ public class AssistantBuilder<T> {
                         Object[] args = parseArguments(tm, toolExecutionRequest.arguments());
                         Object result = tm.method().invoke(tm.targetObject(), args);
                         return result != null ? result.toString() : "null";
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        Throwable cause = e.getCause() != null ? e.getCause() : e;
+                        return "Error executing tool: " + cause.getMessage();
                     } catch (Exception e) {
                         return "Error executing tool: " + e.getMessage();
                     }

@@ -97,6 +97,8 @@ import com.google.gson.JsonParser;
  * @see Conversation
  * @see ConversationBuilder
  * @see AssistantBuilder
+ * @see AgentBuilder
+ * @see EasyAgent
  * @see EasyAIConfig
  * @see dyntabs.ai.annotation.EasyAIAssistant
  * @see dyntabs.ai.annotation.EasyRAG
@@ -150,6 +152,38 @@ public final class EasyAI {
      */
     public static <T> AssistantBuilder<T> assistant(Class<T> assistantInterface) {
         return new AssistantBuilder<>(assistantInterface);
+    }
+
+    /**
+     * Starts building an {@link EasyAgent} that autonomously plans and executes
+     * multi-step tasks by orchestrating calls to your registered Java services.
+     *
+     * <p>Unlike {@link #assistant(Class)}, which answers a single question,
+     * an agent receives a complex task and breaks it into steps — calling your
+     * service methods in the right order, using the result of each step to
+     * decide what to do next, and adapting if a step fails.</p>
+     *
+     * <pre>{@code
+     * EasyAgent agent = EasyAI.agent()
+     *     .withServices(inventoryService, paymentService, orderService)
+     *     .withMaxSteps(10)
+     *     .withPlanningPrompt(true)
+     *     .withStepListener(step ->
+     *         log.info("[AGENT] Step {}: {}({}) -> {}",
+     *             step.stepNumber(), step.toolName(),
+     *             step.arguments(), step.result()))
+     *     .build();
+     *
+     * String result = agent.execute(
+     *     "Order 2 laptops for user U123, apply loyalty credit, " +
+     *     "use fallback warehouse WH-EU if out of stock."
+     * );
+     * }</pre>
+     *
+     * @return a new {@link AgentBuilder}
+     */
+    public static AgentBuilder agent() {
+        return new AgentBuilder();
     }
 
     /**
