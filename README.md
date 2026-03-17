@@ -72,7 +72,7 @@ Adding AI to a Jakarta EE application with LangChain4J means learning `ChatLangu
 
 ### The solution
 
-Three things cover 90% of use cases:
+Four things cover 95% of use cases:
 
 ```java
 // 1. Simple chat
@@ -112,52 +112,52 @@ PolicyBot bot = EasyAI.assistant(PolicyBot.class).build();
 bot.ask("How many vacation days do employees get?");
 ```
 
+```java
+// 4. Autonomous multi-step agent — plans and executes sequences of tool calls
+EasyAgent agent = EasyAI.agent()
+    .withServices(orderService, paymentService, shippingService)
+    .withMaxSteps(10)
+    .withPlanningPrompt(true)
+    .withStepListener(step -> log.info("Step {}: {} → {}", step.stepNumber(), step.toolName(), step.result()))
+    .build();
+
+String result = agent.execute("Process order #42: verify stock, charge the card, and schedule delivery");
+// Agent autonomously calls the right services in the right order
+```
+
 
 ### What you get
 
 - **Zero-annotation tools** — pass any POJO or `@Inject`-ed EJB to `.withTools()`. EasyAI discovers methods via reflection. No `@Tool`, no schema, no config.
 - **EJB proxy support** — `@Stateless`, `@Stateful`, `@Singleton` beans work transparently. Container services (transactions, security, interceptors) are preserved.
 - **RAG from any source** — classpath, file path, or `byte[]` from a DMS, database BLOB, REST API, or user upload
+- **Autonomous agent** — `EasyAI.agent()` executes multi-step tasks across your services without manual orchestration. Built-in step limit, step listener, and planning prompt.
 - **CDI integration** — assistants are injectable with `@Inject`. Tool beans are auto-wired via `tools = {...}` on the annotation.
 - **Global config + per-call override** — set API key once with `EasyAI.configure()`, override per assistant if needed
 - **Clean error messages** — `EasyAI.extractErrorMessage(e)` parses JSON error responses from OpenAI-compatible providers
 
 ---
 
-## EasyAI vs LangChain4J-CDI
-
-| | EasyAI (TabForge AI) | LangChain4J-CDI |
-|---|---|---|
-| **Target runtime** | Pure Jakarta EE (CDI, EJB, GlassFish, Payara, WildFly) | Jakarta EE + MicroProfile (Quarkus, Helidon, WildFly, Payara) |
-| **LangChain4J API exposure** | Fully hidden — no LangChain4J knowledge required | Partially exposed — still uses LangChain4J annotations and concepts |
-| **Tool registration** | Zero annotations — pass any POJO or EJB directly to `.withTools()` | `@Tool` annotation required on every tool method |
-| **EJB bean as tool** | Built-in — `@Stateless`, `@Stateful`, `@Singleton` work transparently, container services preserved | Not explicitly supported |
-| **Assistant injection** | `@Inject` into any CDI bean | `@Inject` into any CDI bean |
-| **RAG** | `@EasyRAG` annotation — classpath, file, or `byte[]` | Via configuration properties |
-| **Configuration** | Simple `easyai.properties` | Verbose property pattern: `dev.langchain4j.cdi.plugin.<name>.class=...` |
-| **Simple chat (no assistant)** | `EasyAI.chat().build()` — one line | Not directly supported |
-| **MicroProfile Fault Tolerance** | Not included | `@Retry`, `@Timeout`, `@CircuitBreaker` |
-| **Observability** | Not included | MicroProfile Telemetry integration |
-
----
-
 ## Why Not Spring AI?
 
-| | DynTabs / EasyAI | Spring AI |
-|---|---|---|
-| Target runtime | Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara) | Spring Boot |
-| Tool registration | Automatic — pass any POJO | `@Tool` annotation required on every method |
-| EJB bean support | Built-in proxy detection | Not applicable |
-| Custom CDI scope | `@TabScoped` included | Not applicable |
-| AI config | `easyai.properties` + `EasyAI.configure()` | `application.properties` + Spring beans |
-| RAG from byte[] | `DocumentSource.of("name.pdf", bytes)` | Custom `DocumentReader` implementation |
-| CDI injection | `@Inject SupportBot bot` | `@Autowired` (Spring only) |
-| Multi-step agent | `EasyAI.agent()` — built-in, one line | Manual loop + custom orchestration code |
-| Agent step limit | `withMaxSteps(n)` — built-in safety guard | No built-in limit |
-| Agent execution trace | `withStepListener()` — callback per tool call | Debug logging only, no programmatic hook |
-| Agent planning prompt | `withPlanningPrompt(true)` — built-in | Not provided |
+If you are building on Jakarta EE, Spring AI is simply the wrong tool — it requires Spring Boot, Spring context, and Spring beans throughout your application. EasyAI is designed for the Jakarta EE runtime you already have.
 
-EasyAI also works outside Jakarta EE (plain Java, unit tests) — just call `.build()` directly.
+| | TabForge AI (EasyAI + DynTabs) | Spring AI |
+|---|---|---|
+| **Target runtime** | Jakarta EE — CDI, EJB, GlassFish, WildFly, Payara | Spring Boot only |
+| **Tool registration** | Zero annotations — pass any POJO or EJB directly | `@Tool` required on every method |
+| **EJB bean as tool** | Built-in — `@Stateless`, `@Stateful`, `@Singleton` work as-is, container services preserved | Not supported |
+| **Custom CDI scope** | `@TabScoped` — one bean instance per open browser tab | Not applicable |
+| **AI config** | Single `easyai.properties` file + `EasyAI.configure()` | `application.properties` + Spring bean wiring |
+| **RAG from byte[]** | `DocumentSource.of("name.pdf", bytes)` — one line | Requires custom `DocumentReader` implementation |
+| **CDI injection** | `@Inject SupportBot bot` | `@Autowired` (Spring context only) |
+| **Simple chat** | `EasyAI.chat().build()` — one line, no interface needed | Requires `ChatClient` setup |
+| **Multi-step agent** | `EasyAI.agent()` — built-in, fully managed | Manual orchestration loop required |
+| **Agent safety limit** | `withMaxSteps(n)` — hard cap on tool calls, returns final answer when reached | No built-in limit — runaway agents possible |
+| **Agent execution trace** | `withStepListener(step -> ...)` — typed callback with tool name, args, result per step | Debug logging only — no programmatic hook |
+| **Agent planning prompt** | `withPlanningPrompt(true)` — instructs the model to plan before acting | Not provided |
+
+EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps. Just call `.build()` directly, no container needed.
 
 ---
 
@@ -182,7 +182,7 @@ EasyAI also works outside Jakarta EE (plain Java, unit tests) — just call `.bu
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
