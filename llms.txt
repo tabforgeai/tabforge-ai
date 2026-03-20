@@ -1,0 +1,360 @@
+# TabForge AI — LLM Context File
+# Use this file to understand the TabForge AI library API when helping developers write code.
+# GitHub: https://github.com/tabforgeai/tabforge-ai
+# Maven: io.github.tabforgeai:tabforge-ai:1.1.0
+
+## What is TabForge AI?
+
+A Jakarta EE library with two independent modules:
+- **EasyAI** — add AI assistants, chatbots, RAG, and autonomous agents to Jakarta EE apps
+- **DynTabs** — multi-tab PrimeFaces UI with a custom CDI scope per tab (@TabScoped)
+
+Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in plain Java (no container needed).
+
+---
+
+## SETUP
+
+### Maven dependency
+```xml
+<dependency>
+    <groupId>io.github.tabforgeai</groupId>
+    <artifactId>tabforge-ai</artifactId>
+    <version>1.1.0</version>
+</dependency>
+```
+
+### Configuration — src/main/resources/easyai.properties
+```properties
+easyai.provider=openai
+easyai.api-key=sk-YOUR-KEY
+easyai.model-name=gpt-4o-mini
+```
+
+Supported providers: `openai`, `ollama`
+
+For Ollama (local, free):
+```properties
+easyai.provider=ollama
+easyai.model-name=llama3
+```
+
+**IMPORTANT:** Add `-parameters` compiler flag to maven-compiler-plugin — required for correct method parameter name discovery by EasyAI.
+```xml
+<plugin>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <configuration>
+        <compilerArgs><arg>-parameters</arg></compilerArgs>
+    </configuration>
+</plugin>
+```
+
+---
+
+## EASYAI API
+
+### 1. Simple Chat — EasyAI.chat()
+
+```java
+// Minimal
+Conversation chat = EasyAI.chat().build();
+String answer = chat.send("What is a HashMap?");
+
+// With memory and system message
+Conversation chat = EasyAI.chat()
+    .withMemory(20)
+    .withSystemMessage("You are a helpful Java tutor.")
+    .build();
+
+// Override provider per conversation
+Conversation chat = EasyAI.chat()
+    .withProvider("ollama")
+    .withModel("llama3")
+    .withTemperature(0.3)
+    .withMaxTokens(500)
+    .build();
+```
+
+### 2. AI Assistant — EasyAI.assistant()
+
+Define an interface, EasyAI creates an AI implementation at runtime.
+
+```java
+@EasyAIAssistant(systemMessage = "You are a helpful code reviewer")
+public interface CodeReviewer {
+    String review(String code);
+}
+
+CodeReviewer reviewer = EasyAI.assistant(CodeReviewer.class).build();
+String feedback = reviewer.review("public void foo() { ... }");
+```
+
+### 3. Assistant with Tools (AI calls your Java methods)
+
+**No @Tool annotations needed on your service classes.** Pass any POJO or EJB directly.
+
+```java
+// Your service — plain Java, no AI annotations needed
+public class OrderService {
+    public String findOrder(String orderId) { ... }
+    public String cancelOrder(String orderId) { ... }
+    public List<String> getOrdersByCustomer(String email) { ... }
+}
+
+@EasyAIAssistant(systemMessage = "You are an e-commerce support bot.")
+public interface SupportBot {
+    String ask(String question);
+}
+
+OrderService orderService = new OrderService();
+SupportBot bot = EasyAI.assistant(SupportBot.class)
+    .withTools(orderService, userService)   // pass any number of services
+    .build();
+
+bot.ask("Where is my order #12345?");
+// AI automatically calls orderService.findOrder("12345")
+```
+
+Optional — add @EasyTool for better method descriptions (helps AI pick the right method):
+```java
+@EasyTool("Cancels an active order. Only works for unshipped orders.")
+public String cancelOrder(String orderId) { ... }
+```
+
+### 4. RAG — Document-Powered AI
+
+Three ways to provide documents:
+
+**A) Static files (classpath or disk):**
+```java
+@EasyRAG(source = "classpath:company-policy.pdf")
+@EasyAIAssistant(systemMessage = "Answer based on company policy.")
+public interface PolicyBot {
+    String ask(String question);
+}
+
+PolicyBot bot = EasyAI.assistant(PolicyBot.class).build();
+bot.ask("How many vacation days do employees get?");
+```
+
+Multiple files: `@EasyRAG(source = {"classpath:doc1.pdf", "classpath:doc2.txt"})`
+
+**B) File path at runtime:**
+```java
+PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+    .withRAG("/path/to/document.pdf")
+    .build();
+```
+
+**C) byte[] from DMS / database / REST API / user upload:**
+```java
+byte[] pdfBytes = dmsClient.downloadDocument("DOC-123");
+
+PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+    .withRAG(DocumentSource.of("policy.pdf", pdfBytes))
+    .build();
+
+// From plain text string:
+.withRAG(DocumentSource.ofText("rules", someStringContent))
+```
+
+RAG tuning:
+```java
+@EasyRAG(source = "classpath:manual.pdf", maxResults = 5, minScore = 0.7)
+```
+
+**Combine RAG + Tools:**
+```java
+SalesBot bot = EasyAI.assistant(SalesBot.class)
+    .withRAG(DocumentSource.of("catalog.pdf", catalogBytes))
+    .withTools(inventoryService, pricingService)
+    .build();
+```
+
+### 5. EasyAgent — Autonomous Multi-Step Task Execution
+
+The agent autonomously plans and executes sequences of service method calls to complete a complex task. No orchestration code needed.
+
+```java
+EasyAgent agent = EasyAI.agent()
+    .withServices(inventoryService, paymentService, orderService, shippingService)
+    .withMaxSteps(10)               // hard cap on tool calls (strongly recommended)
+    .withPlanningPrompt(true)       // instructs LLM to plan before acting
+    .withStepListener(step ->
+        log.info("Step {}: {}({}) -> {}",
+            step.stepNumber(), step.toolName(), step.arguments(), step.result()))
+    .build();
+
+String result = agent.execute(
+    "Order 2 laptops for user U123, apply loyalty credit, deliver to Belgrade."
+);
+```
+
+AgentStep record fields: `stepNumber()`, `toolName()`, `arguments()`, `result()`
+
+When step limit is reached, agent returns final answer without further calls.
+When a tool throws an exception, result contains: `TOOL_ERROR | tool=X | error=Y | suggestion=...`
+
+**When to use agent vs assistant:**
+- Single Q&A with tool calls → `EasyAI.assistant()`
+- Multi-step task, conditional branching, autonomous execution → `EasyAI.agent()`
+
+---
+
+## JAKARTA EE / CDI INTEGRATION
+
+### @Inject assistant (no tools)
+```java
+@EasyAIAssistant(systemMessage = "You are a helpful Java tutor")
+public interface JavaTutor {
+    String ask(String question);
+}
+
+@Inject JavaTutor tutor;  // CDI extension creates @ApplicationScoped instance automatically
+```
+
+### @Inject assistant with auto-wired tools
+```java
+@EasyAIAssistant(
+    systemMessage = "You are an e-commerce support bot",
+    tools = {OrderService.class, InventoryService.class}
+)
+public interface SupportBot {
+    String ask(String question);
+}
+
+@Inject SupportBot bot;  // OrderService and InventoryService resolved from CDI container
+```
+
+### EJB beans as tools
+Pass @Stateless, @Stateful, @Singleton EJBs directly — transactions, security, interceptors preserved.
+```java
+@Inject OrderService orderService;  // EJB proxy
+
+SupportBot bot = EasyAI.assistant(SupportBot.class)
+    .withTools(orderService)        // EJB proxy detected automatically
+    .build();
+```
+
+### EasyAgent in CDI — use @PostConstruct
+```java
+@Named @ApplicationScoped
+public class AgentBean {
+
+    @Inject OrderService orderService;
+    @Inject PaymentService paymentService;
+
+    private EasyAgent agent;
+
+    @PostConstruct
+    public void init() {
+        // IMPORTANT: build agent here, not at field initialization
+        // @Inject fields are not yet populated at field init time
+        agent = EasyAI.agent()
+            .withServices(orderService, paymentService)
+            .withMaxSteps(10)
+            .build();
+    }
+
+    public String process(String task) {
+        return agent.execute(task);
+    }
+}
+```
+
+---
+
+## ANNOTATIONS REFERENCE
+
+| Annotation | Where | Purpose |
+|---|---|---|
+| `@EasyAIAssistant` | interface | Marks as AI assistant; `systemMessage` sets personality |
+| `@EasyTool` | method | Optional description to help AI pick the right method |
+| `@EasyRAG` | interface | Loads documents for RAG; `source`, `maxResults`, `minScore` |
+
+---
+
+## CONFIGURATION REFERENCE
+
+| Property | Description | Default |
+|---|---|---|
+| `easyai.provider` | `openai` or `ollama` | `openai` |
+| `easyai.api-key` | API key | (none) |
+| `easyai.model-name` | Model name | (provider default) |
+| `easyai.base-url` | Custom endpoint | (provider default) |
+| `easyai.temperature` | 0.0–1.0 | (provider default) |
+| `easyai.max-tokens` | Max response length | (provider default) |
+
+Programmatic override:
+```java
+EasyAI.configure(EasyAIConfig.builder()
+    .provider("openai")
+    .apiKey("sk-...")
+    .modelName("gpt-4o")
+    .temperature(0.7)
+    .build());
+```
+
+---
+
+## ERROR HANDLING
+
+```java
+try {
+    return bot.ask(userQuestion);
+} catch (Exception e) {
+    return "Error: " + EasyAI.extractErrorMessage(e);
+}
+```
+
+`EasyAI.extractErrorMessage(e)` parses JSON error responses from OpenAI-compatible providers.
+
+LangChain4J exceptions: `AuthenticationException`, `RateLimitException`, `InvalidRequestException`, `InternalServerException`
+
+---
+
+## COMMON MISTAKES
+
+- **Missing `-parameters` compiler flag** → method parameters appear as `arg0`, `arg1` instead of real names. AI cannot understand what to pass to methods.
+- **Building EasyAgent at field initialization in CDI** → NullPointerException because `@Inject` fields aren't populated yet. Always build in `@PostConstruct`.
+- **Tool methods returning complex objects** → AI works best with String return values. Ensure `toString()` is meaningful, or convert to String in the method.
+- **No `withMaxSteps()`** → agent may make many sequential calls, increasing token cost significantly.
+- **Model name with quotes in properties file** → `easyai.model-name="gpt-4o"` fails. Use `easyai.model-name=gpt-4o` (no quotes).
+
+---
+
+## DYNTABS — Multi-Tab PrimeFaces UI
+
+### Define a tab bean
+```java
+@Named
+@TabScoped
+@DynTab(name = "OrdersDynTab", title = "Orders", includePage = "/WEB-INF/include/orders/orders.xhtml")
+public class OrdersBean extends BaseDyntabCdiBean {
+
+    @Inject OrderService orderService;
+
+    @Override
+    protected void accessPointMethod(Map parameters) {
+        // called when tab opens — load data here
+        orders = orderService.findAll();
+    }
+
+    @Override
+    protected void exitPointMethod() {
+        // called when tab closes — cleanup here
+    }
+}
+```
+
+### Open a tab from a menu item
+```xml
+<p:menuitem value="Orders" action="uishell:Orders"/>
+```
+
+### Key DynTabs features
+- `@TabScoped` — one CDI bean instance per open tab (independent instances)
+- `sendMessageToAllAppModules(payload)` / `onApplicationMessage()` — inter-tab messaging
+- `closeAndReturnValueToCaller(value)` — child tab returns value to parent
+- `@DynTab(securedResource=true, allowedRoles={"ADMIN"})` — declarative security
+- Open tabs programmatically with parameters at runtime
