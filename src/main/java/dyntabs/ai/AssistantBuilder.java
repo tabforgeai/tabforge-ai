@@ -8,7 +8,7 @@ import java.util.Map;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.tool.ToolExecutor;
@@ -17,6 +17,8 @@ import dyntabs.ai.annotation.EasyRAG;
 import dyntabs.ai.assistant.ToolIntrospector;
 import dyntabs.ai.assistant.ToolMethod;
 import dyntabs.ai.rag.DocumentSource;
+import dyntabs.ai.rag.MilvusConfig;
+import dyntabs.ai.rag.MilvusEngine;
 import dyntabs.ai.rag.RagEngine;
 
 /**
@@ -122,13 +124,16 @@ public class AssistantBuilder<T> {
     private int memorySize = 20;
     private String systemMessage;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
-    private ChatLanguageModel externalModel;
+    private ChatModel externalModel;
 
     // Programmatic RAG config (overrides @EasyRAG annotation if set)
     private String[] ragSources;
     private List<DocumentSource> ragDocumentSources;
     private int ragMaxResults = 3;
     private double ragMinScore = 0.5;
+
+    // Persistent vector-store RAG (Milvus) — highest priority when set
+    private MilvusConfig milvusConfig;
 
     AssistantBuilder(Class<T> assistantInterface) {
         this.assistantInterface = assistantInterface;
@@ -304,18 +309,88 @@ public class AssistantBuilder<T> {
         return this;
     }
 
-    public AssistantBuilder<T> withChatLanguageModel(ChatLanguageModel model) {
+    /**
+     * Connects this assistant to a <b>persistent</b> Milvus collection for retrieval,
+     * using explicit connection settings.
+     *
+     * <p>This is the read-side counterpart to {@link EasyAI#indexer()}. Unlike
+     * {@link #withRAG(String...)} — which loads and embeds documents fresh on every
+     * {@code build()} into an in-memory store — {@code withMilvus} points at a collection
+     * that was populated earlier (and stays populated). Think "query the existing
+     * database" versus "load a file into memory for this one request."</p>
+     *
+     * <p>When set, Milvus takes precedence over {@code withRAG(...)} and {@code @EasyRAG}.
+     * Retrieval tuning uses {@link #withRAG(String[], int, double) maxResults/minScore}
+     * defaults (3 / 0.5) unless you call {@link #withMilvus(MilvusConfig, int, double)}.</p>
+     *
+     * <pre>{@code
+     * PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+     *     .withMilvus("localhost", 19530, "documents")
+     *     .build();
+     * }</pre>
+     *
+     * @param host           Milvus server hostname
+     * @param port           Milvus server port (typically 19530)
+     * @param collectionName the collection to retrieve from
+     * @return this builder
+     */
+    public AssistantBuilder<T> withMilvus(String host, int port, String collectionName) {
+        this.milvusConfig = MilvusConfig.of(host, port, collectionName);
+        return this;
+    }
+
+    /**
+     * Connects this assistant to a persistent Milvus collection using a fully built
+     * {@link MilvusConfig} (for non-default dimension or credentials).
+     *
+     * @param config the Milvus connection settings
+     * @return this builder
+     */
+    public AssistantBuilder<T> withMilvus(MilvusConfig config) {
+        this.milvusConfig = config;
+        return this;
+    }
+
+    /**
+     * Connects this assistant to a persistent Milvus collection with explicit retrieval
+     * tuning.
+     *
+     * @param config     the Milvus connection settings
+     * @param maxResults maximum relevant segments to retrieve per query
+     * @param minScore   minimum relevance score, 0.0 to 1.0
+     * @return this builder
+     */
+    public AssistantBuilder<T> withMilvus(MilvusConfig config, int maxResults, double minScore) {
+        this.milvusConfig = config;
+        this.ragMaxResults = maxResults;
+        this.ragMinScore = minScore;
+        return this;
+    }
+
+    /**
+     * Connects this assistant to a persistent Milvus collection configured entirely from
+     * {@code easyai.properties} (keys {@code easyai.milvus.*}).
+     *
+     * @return this builder
+     * @see MilvusConfig#fromProperties()
+     */
+    public AssistantBuilder<T> withMilvus() {
+        this.milvusConfig = MilvusConfig.fromProperties();
+        return this;
+    }
+
+    public AssistantBuilder<T> withChatModel(ChatModel model) {
         this.externalModel = model;
         return this;
     }
 
     public T build() {
-        ChatLanguageModel model = externalModel != null
+        ChatModel model = externalModel != null
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
 
         AiServices<T> serviceBuilder = AiServices.builder(assistantInterface)
-                .chatLanguageModel(model);
+                .chatModel(model);
 
         // Memory
         if (memorySize > 0) {
@@ -352,10 +427,12 @@ public class AssistantBuilder<T> {
             serviceBuilder.tools(toolMap);
         }
 
-        // RAG support - programmatic withRAG() takes precedence over @EasyRAG
-        // Priority: DocumentSource (bytes) > String paths > @EasyRAG annotation
+        // RAG support - programmatic config takes precedence over @EasyRAG
+        // Priority: Milvus (persistent) > DocumentSource (bytes) > String paths > @EasyRAG annotation
         ContentRetriever contentRetriever = null;
-        if (ragDocumentSources != null && !ragDocumentSources.isEmpty()) {
+        if (milvusConfig != null) {
+            contentRetriever = MilvusEngine.createRetriever(milvusConfig, ragMaxResults, ragMinScore);
+        } else if (ragDocumentSources != null && !ragDocumentSources.isEmpty()) {
             contentRetriever = RagEngine.createRetriever(ragDocumentSources, ragMaxResults, ragMinScore);
         } else if (ragSources != null && ragSources.length > 0) {
             contentRetriever = RagEngine.createRetriever(ragSources, ragMaxResults, ragMinScore);

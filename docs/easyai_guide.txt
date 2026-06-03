@@ -11,13 +11,17 @@
   ---------------
   EasyAI is an abstraction layer over LangChain4J. It hides all the low-level
   complexity behind a simple builder-pattern API. You don't need to know anything
-  about ChatLanguageModel, AiServices, ToolSpecification, or EmbeddingStore.
+  about ChatModel, AiServices, ToolSpecification, or EmbeddingStore.
 
-  You just need to know 4 things:
+  You just need to know 6 things:
     1. EasyAI.chat()       - for simple conversations
     2. EasyAI.assistant()  - for smart assistants that can call your Java code
     3. @EasyRAG            - for AI that answers questions from your documents
     4. EasyAI.agent()      - for autonomous multi-step task execution
+    5. EasyAI.indexer()    - to store documents in a vector database (Milvus)
+                             for persistent, large-scale RAG
+    6. EasyAI.extract()    - to turn unstructured text or documents into
+                             typed Java objects (records / POJOs)
 
 
 ================================================================================
@@ -29,7 +33,8 @@
   The following dependencies are included:
     - langchain4j           (core AI services)
     - langchain4j-open-ai   (OpenAI provider)
-    - langchain4j-easy-rag   (document processing for RAG)
+    - langchain4j-easy-rag   (document processing + local embedding model for RAG)
+    - langchain4j-milvus     (persistent vector store - see USE CASE 9)
 
   Step 2: Configuration
   ------------------------------------------------
@@ -381,6 +386,11 @@
     User-uploaded file (byte[])       .withRAG(DocumentSource.of(...))
     Plain text / String               .withRAG(DocumentSource.ofText(...))
 
+  Note: every approach above is EPHEMERAL — documents are embedded into an
+  in-memory store on each build() and vanish when the app stops. For a large or
+  shared document set that must survive restarts, embed once into a persistent
+  vector database instead — see USE CASE 9 (Milvus).
+
 
 ================================================================================
   USE CASE 5: Jakarta EJB Beans as Tools
@@ -594,7 +604,7 @@
     Tools known at compile time             @Inject + tools = {...} attribute
     Tools or config change at runtime       EasyAI.assistant(...).withTools(...).build()
     RAG with byte[] from DMS/DB/API         EasyAI.assistant(...).withRAG(...).build()
-    Testing with mock model                 EasyAI.assistant(...).withChatLanguageModel(mock).build()
+    Testing with mock model                 EasyAI.assistant(...).withChatModel(mock).build()
 
 
 ================================================================================
@@ -724,6 +734,242 @@
 
 
 ================================================================================
+  USE CASE 9: Persistent Knowledge Base with Milvus (Index Once, Ask Forever)
+================================================================================
+
+  USE CASE 4 (RAG) loads and embeds your documents fresh every time you build an
+  assistant, into an in-memory store that disappears when the app restarts. That
+  is perfect for a handful of small, static documents.
+
+  But real applications accumulate thousands of documents, shared across users
+  and surviving restarts. Re-reading and re-embedding them on every boot is slow
+  and wasteful. You want to embed each document ONCE, store the vectors in a real
+  database, and have every assistant — in every session, on every server node —
+  query that same store instantly.
+
+  That is what a persistent vector store gives you. EasyAI integrates Milvus
+  (https://milvus.io), a production-grade vector database, in two halves:
+
+    EasyAI.indexer()   - the WRITE side: put documents into Milvus (once)
+    .withMilvus(...)   - the READ side:  let an assistant query that Milvus
+
+  Think of it like a database: indexer() is the INSERT, withMilvus() is the
+  SELECT. You populate the collection once (a batch job, or on each upload);
+  everyone reads from it forever after.
+
+
+  --- Scenario A: A company knowledge base indexed overnight ---
+
+  Your support team has 5,000 policy PDFs, manuals, and FAQs. A nightly batch job
+  embeds any new or changed documents into Milvus. Every app instance then answers
+  employee questions against that shared collection — no document is re-embedded
+  at request time, and a server restart costs nothing.
+
+  Nightly indexing job (runs once, not per request):
+
+    int indexed = EasyAI.indexer()
+        .toMilvus("milvus.internal", 19530, "company_kb")
+        .index(
+            "file:/var/data/docs/policy.pdf",
+            "file:/var/data/docs/handbook.pdf",
+            "classpath:faq.txt"
+        );
+    log.info("Indexed {} documents into the knowledge base", indexed);
+
+  Any assistant, any time, any server node reads from the same store:
+
+    @EasyAIAssistant(systemMessage = "Answer using the company knowledge base.")
+    public interface KbBot {
+        String ask(String question);
+    }
+
+    KbBot bot = EasyAI.assistant(KbBot.class)
+        .withMilvus("milvus.internal", 19530, "company_kb")
+        .build();
+
+    bot.ask("How many vacation days do full-time employees get?");
+    // Instant - no documents are loaded or embedded at request time
+
+
+  --- Scenario B: Users upload documents that stay searchable ---
+
+  In a web app, users upload contracts, reports, or manuals. You don't have a file
+  path - you have the uploaded bytes. Index them straight into Milvus on upload,
+  and every future question searches the whole accumulated corpus.
+
+  On upload (bytes, not a file path):
+
+    // e.g. PrimeFaces UploadedFile, a Servlet Part, a DMS download, a DB BLOB
+    byte[] bytes    = uploadedFile.getContent();
+    String fileName = uploadedFile.getFileName();   // "contract-2026.pdf"
+
+    EasyAI.indexer()
+        .toMilvus("localhost", 19530, "user_documents")
+        .index(DocumentSource.of(fileName, bytes));
+
+  Later - the assistant answers across everything uploaded so far:
+
+    DocsBot bot = EasyAI.assistant(DocsBot.class)
+        .withMilvus("localhost", 19530, "user_documents")
+        .build();
+
+    bot.ask("What is the termination notice period in the 2026 contract?");
+
+  The same DocumentSource you already know from USE CASE 4 works here - bytes from
+  a DMS, a database BLOB, a REST API, or plain text via
+  DocumentSource.ofText(name, text). You can index many at once:
+
+    EasyAI.indexer()
+        .toMilvus("localhost", 19530, "user_documents")
+        .index(
+            DocumentSource.of("policy.pdf", dmsClient.download("policy")),
+            DocumentSource.of("terms.docx", resultSet.getBytes("doc_content")),
+            DocumentSource.ofText("extra-rules", "No remote work on Fridays.")
+        );
+
+
+  --- Configuration (optional): keep connection details out of code ---
+
+  Put Milvus settings in easyai.properties and call the no-argument variants:
+
+    easyai.milvus.host=localhost
+    easyai.milvus.port=19530
+    easyai.milvus.collection=company_kb
+    easyai.milvus.dimension=384
+
+    EasyAI.indexer().toMilvus().index(...);             // settings from properties
+    EasyAI.assistant(KbBot.class).withMilvus().build();
+
+  The dimension (384) must match the embedding model. EasyAI uses the local model
+  bundled with langchain4j-easy-rag (no API key, runs offline) for BOTH indexing
+  and retrieval, so dimensions line up automatically. If you switch embedding
+  models, set the matching dimension or Milvus rejects the inserts.
+
+
+  --- Tuning retrieval ---
+
+    KbBot bot = EasyAI.assistant(KbBot.class)
+        .withMilvus(
+            MilvusConfig.of("localhost", 19530, "company_kb"),
+            5,      // maxResults: top 5 relevant segments (default 3)
+            0.7     // minScore:  70%+ relevance only      (default 0.5)
+        )
+        .build();
+
+
+  --- Ephemeral RAG (USE CASE 4) vs Persistent Milvus (this one) ---
+
+    Question                                 In-memory RAG    Milvus
+    ---------------------------------------  ---------------  ---------------
+    A few small static docs                  yes              overkill
+    Thousands of docs / large corpus         slow             yes
+    Survives app restart                     no (re-embeds)   yes
+    Shared across sessions / server nodes    no               yes
+    Embed once, query many times             no               yes
+    Zero infrastructure to run               yes              needs Milvus
+
+  When set, .withMilvus(...) takes precedence over .withRAG(...) and @EasyRAG on
+  the same assistant.
+
+  Note on freshness: Milvus is eventually consistent - a document you just indexed
+  may take a moment to become searchable. For "index then immediately query"
+  flows, allow a brief delay (or re-query).
+
+
+================================================================================
+  USE CASE 10: Structured Extraction (Text/Document -> Typed Java Object)
+================================================================================
+
+  Everything above produces text. This one produces TYPED DATA: hand EasyAI an
+  email, a chat message, or a PDF, and get back a populated Java record or POJO.
+
+  This is the bridge from the unstructured / AI world into your normal,
+  typed-Java world. Once .from(...) returns, the AI is out of the picture - you
+  hold a plain Invoice / Order / Candidate object that your existing services,
+  JPA entities, and PrimeFaces forms already know how to handle.
+
+    record Invoice(String vendor, String invoiceNumber, LocalDate date,
+                   BigDecimal total, List<LineItem> items) {}
+
+    // From free text:
+    Invoice inv = EasyAI.extract(Invoice.class).from(emailBody);
+
+    // From a document's bytes - parses (Tika) AND extracts in one call:
+    Invoice inv = EasyAI.extract(Invoice.class)
+                        .from(DocumentSource.of("invoice.pdf", pdfBytes));
+
+    // From here on it is just data:
+    em.persist(inv);
+    if (inv.total().compareTo(LIMIT) > 0) approvalService.require(inv);
+
+  Supports records and POJOs, nested objects, lists, enums, and java.time types.
+  Robustness is built in: malformed model output is retried automatically.
+
+
+  --- Scenario A: Turn every inbound email into a typed Order ---
+
+  A sales mailbox receives free-form order emails ("Hi, please send 3 keyboards
+  and 2 monitors to our Belgrade office, invoice to ACME d.o.o ..."). Instead of
+  parsing strings by hand, extract a typed Order and feed it straight into your
+  existing order pipeline.
+
+    record OrderLine(String product, int quantity) {}
+    record Order(String customer, String shipTo, List<OrderLine> lines) {}
+
+    Order order = EasyAI.extract(Order.class).from(emailBody);
+
+    orderService.create(order);     // your existing EJB / service, unchanged
+
+  No prompt engineering, no JSON parsing, no brittle regex - the email becomes an
+  Order object and the rest of your application proceeds as normal.
+
+
+  --- Scenario B: Accounts payable - drop a PDF invoice, get a validated entity ---
+
+  Users upload supplier invoices (PDF) in a web app. Extract a validated Invoice
+  ready to persist and route for approval. Turn on .validate() to enforce Jakarta
+  Bean Validation constraints declared on the target type.
+
+    public class Invoice {
+        @NotBlank String vendor;
+        @NotBlank String invoiceNumber;
+        @NotNull  LocalDate date;
+        @Positive BigDecimal total;
+    }
+
+    // e.g. PrimeFaces UploadedFile
+    byte[] bytes    = uploadedFile.getContent();
+    String fileName = uploadedFile.getFileName();   // "invoice-4042.pdf"
+
+    Invoice inv = EasyAI.extract(Invoice.class)
+                        .validate()                 // enforce @NotBlank/@NotNull/@Positive
+                        .from(DocumentSource.of(fileName, bytes));
+
+    invoiceRepository.save(inv);
+    approvalQueue.submit(inv);
+
+  If the document is missing a required field or the total is not positive,
+  .validate() throws ExtractionException with a clear message - so bad data never
+  reaches your database.
+
+
+  --- Options ---
+
+    .withRetries(n)   - extra attempts if the model returns malformed JSON
+                        (default 2; set 0 to disable)
+    .validate()       - run Jakarta Bean Validation on the result; requires a
+                        Bean Validation provider on the classpath (present in a
+                        Jakarta EE container). Throws ExtractionException on a
+                        violation.
+    .withModel(...), .withApiKey(...), .withProvider(...), .withBaseUrl(...),
+    .withTemperature(...)   - same per-call config overrides as elsewhere
+                              (extraction defaults to temperature 0.0).
+
+  Tip: extraction pairs naturally with the other use cases - extract a record
+  from a RAG-retrieved document, or have an agent call a service that extracts.
+
+
+================================================================================
   CONFIGURATION REFERENCE
 ================================================================================
 
@@ -737,6 +983,17 @@
   easyai.base-url        Custom API endpoint            (provider default)
   easyai.temperature     Creativity (0.0 to 1.0)        (provider default)
   easyai.max-tokens      Max response length             (provider default)
+
+  Milvus vector store (optional - see USE CASE 9):
+
+  Property                  Description                  Default
+  ------------------------  ---------------------------  -----------
+  easyai.milvus.host        Milvus server hostname       localhost
+  easyai.milvus.port        Milvus server port           19530
+  easyai.milvus.collection  Collection name              (required)
+  easyai.milvus.dimension   Embedding dimension          384
+  easyai.milvus.username    Username (if auth enabled)   (none)
+  easyai.milvus.password    Password (if auth enabled)   (none)
 
   Supported providers:
     openai  - OpenAI (GPT-4o, GPT-4o-mini, etc.)
@@ -791,6 +1048,9 @@
     AssistantBuilder.java       Builder for AI assistants
     EasyAgent.java              Agent with execute(task) method
     AgentBuilder.java           Builder for EasyAgent
+    IndexerBuilder.java         Builder: picks the vector store (EasyAI.indexer())
+    EasyIndexer.java            Indexes documents into the vector store (.index())
+    ExtractionBuilder.java      Builder: text/document -> typed object (EasyAI.extract())
 
   dyntabs.ai.agent
     AgentStep.java              Record: stepNumber, toolName, arguments, result
@@ -806,8 +1066,15 @@
     ToolMethod.java             Internal record (spec + method)
 
   dyntabs.ai.rag
-    RagEngine.java              Document loading, embedding, retrieval
+    RagEngine.java              Document loading, embedding, in-memory retrieval
     DocumentSource.java         Wraps byte[] content for RAG from DMS/DB/API
+    MilvusConfig.java           Milvus connection settings (host/port/collection)
+    MilvusEngine.java           Persistent store: ingest + retrieve via Milvus
+
+  dyntabs.ai.extract
+    SchemaDescriber.java        Reflection: target class -> JSON skeleton for the model
+    ExtractionEngine.java       Prompt -> model -> JSON -> typed object (+ retry, validate)
+    ExtractionException.java    Thrown when extraction or validation fails
 
   dyntabs.ai.cdi
     EasyAIExtension.java        CDI Extension for @Inject support
@@ -829,9 +1096,9 @@
   4. Memory size depends on use case. For quick Q&A, 10 is enough.
      For long conversations, use 30-50. More memory = higher API cost.
 
-  5. For testing, use withChatLanguageModel() to inject a mock:
+  5. For testing, use withChatModel() to inject a mock:
        Conversation chat = EasyAI.chat()
-           .withChatLanguageModel(mockModel)
+           .withChatModel(mockModel)
            .build();
 
   6. Temperature guide:

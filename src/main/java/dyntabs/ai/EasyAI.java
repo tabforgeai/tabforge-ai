@@ -8,7 +8,7 @@ import com.google.gson.JsonParser;
  * Main entry point for the EasyAI library.
  *
  * <p>EasyAI is a simple abstraction layer over LangChain4J. It hides all the low-level
- * details (ChatLanguageModel, ChatMemory, AiServices, ToolSpecification, EmbeddingStore...)
+ * details (ChatModel, ChatMemory, AiServices, ToolSpecification, EmbeddingStore...)
  * behind a clean builder-pattern API that any Java developer can use in minutes.</p>
  *
  * <h2>Quick Start</h2>
@@ -184,6 +184,70 @@ public final class EasyAI {
      */
     public static AgentBuilder agent() {
         return new AgentBuilder();
+    }
+
+    /**
+     * Starts a typed extraction: turn unstructured text or a document into a populated Java
+     * object (record or POJO).
+     *
+     * <p>This is the bridge from the unstructured/AI world into your normal typed-Java world.
+     * Once {@code .from(...)} returns, no AI is involved any more — you hold a plain object
+     * that your existing services, JPA entities, and PrimeFaces forms already understand.</p>
+     *
+     * <pre>{@code
+     * record Invoice(String vendor, String invoiceNumber, LocalDate date,
+     *                BigDecimal total, List<LineItem> items) {}
+     *
+     * // From free text:
+     * Invoice inv = EasyAI.extract(Invoice.class).from(emailBody);
+     *
+     * // From a document's bytes - parses (Tika) and extracts in one call:
+     * Invoice inv = EasyAI.extract(Invoice.class)
+     *     .from(DocumentSource.of("invoice.pdf", pdfBytes));
+     *
+     * em.persist(inv);   // it is just data from here on
+     * }</pre>
+     *
+     * <p>Malformed model output is retried automatically; call {@code .validate()} to also run
+     * Jakarta Bean Validation on the result.</p>
+     *
+     * @param <T>  the type to extract
+     * @param type the class to extract (a record or POJO)
+     * @return a new {@link ExtractionBuilder}
+     * @see ExtractionBuilder
+     */
+    public static <T> ExtractionBuilder<T> extract(Class<T> type) {
+        return new ExtractionBuilder<>(type);
+    }
+
+    /**
+     * Starts building a document indexer that persists embeddings into a vector store
+     * (currently Milvus), so assistants can retrieve them later.
+     *
+     * <p>This is the <b>write side</b> of RAG. Where {@link #assistant(Class)} with
+     * {@code withRAG(...)} builds an ephemeral, in-memory index that vanishes when the JVM
+     * stops, {@code indexer()} writes to a persistent store you populate once and reuse —
+     * think "save the documents to the database" rather than "load them for this request."</p>
+     *
+     * <pre>{@code
+     * // One-time (or scheduled) ingestion:
+     * int indexed = EasyAI.indexer()
+     *     .toMilvus("localhost", 19530, "documents")
+     *     .index("file:/data/policy.pdf", "classpath:faq.txt");
+     *
+     * // Later, any assistant reads from the same collection:
+     * PolicyBot bot = EasyAI.assistant(PolicyBot.class)
+     *     .withMilvus("localhost", 19530, "documents")
+     *     .build();
+     * }</pre>
+     *
+     * @return a new {@link IndexerBuilder}
+     * @see IndexerBuilder
+     * @see EasyIndexer
+     * @see AssistantBuilder#withMilvus(String, int, String)
+     */
+    public static IndexerBuilder indexer() {
+        return new IndexerBuilder();
     }
 
     /**

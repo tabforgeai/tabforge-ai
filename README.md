@@ -68,11 +68,11 @@ That's it. DynTabs opens the tab, creates an isolated `OrdersBean` instance in `
 
 ### The problem
 
-Adding AI to a Jakarta EE application with LangChain4J means learning `ChatLanguageModel`, `AiServices`, `ToolSpecification`, `EmbeddingStore`, `ContentRetriever`, and more — before writing a single line of business logic. Spring AI has the same problem.
+Adding AI to a Jakarta EE application with LangChain4J means learning `ChatModel`, `AiServices`, `ToolSpecification`, `EmbeddingStore`, `ContentRetriever`, and more — before writing a single line of business logic. Spring AI has the same problem.
 
 ### The solution
 
-Four things cover 95% of use cases:
+Six things cover 95% of use cases:
 
 ```java
 // 1. Simple chat
@@ -125,12 +125,43 @@ String result = agent.execute("Process order #42: verify stock, charge the card,
 // Agent autonomously calls the right services in the right order
 ```
 
+```java
+// 5. Persistent RAG — index documents once into a vector store, query them forever
+EasyAI.indexer()
+    .toMilvus("localhost", 19530, "company_kb")
+    .index("file:/data/handbook.pdf");          // also accepts byte[] from a DMS, DB BLOB, or upload
+
+@EasyAIAssistant(systemMessage = "Answer from the company knowledge base.")
+public interface KbBot { String ask(String question); }
+
+KbBot bot = EasyAI.assistant(KbBot.class)
+    .withMilvus("localhost", 19530, "company_kb")   // survives restarts, shared across sessions/nodes
+    .build();
+
+bot.ask("How many vacation days do employees get?");
+// No documents are loaded or embedded at request time — they were indexed once, up front
+```
+
+```java
+// 6. Structured extraction — turn unstructured text or a document into a typed Java object
+record Invoice(String vendor, String invoiceNumber, LocalDate date,
+               BigDecimal total, List<LineItem> items) {}
+
+// From an email body, or straight from a PDF's bytes (parsed + extracted in one call)
+Invoice inv = EasyAI.extract(Invoice.class)
+    .from(DocumentSource.of("invoice.pdf", pdfBytes));
+
+em.persist(inv);   // no AI from here on — it's just a typed object your code already understands
+```
+
 
 ### What you get
 
 - **Zero-annotation tools** — pass any POJO or `@Inject`-ed EJB to `.withTools()`. EasyAI discovers methods via reflection. No `@Tool`, no schema, no config.
 - **EJB proxy support** — `@Stateless`, `@Stateful`, `@Singleton` beans work transparently. Container services (transactions, security, interceptors) are preserved.
 - **RAG from any source** — classpath, file path, or `byte[]` from a DMS, database BLOB, REST API, or user upload
+- **Persistent vector store** — `EasyAI.indexer().toMilvus(...).index(...)` writes embeddings to Milvus once; `.withMilvus(...)` lets any assistant query them. Survives restarts, shared across sessions and server nodes. Local embedding model included (no API key, runs offline)
+- **Structured extraction** — `EasyAI.extract(Invoice.class).from(text or PDF)` returns a populated record/POJO. Parses the document, extracts, retries on malformed output, and optionally runs Jakarta Bean Validation — in one call
 - **Autonomous agent** — `EasyAI.agent()` executes multi-step tasks across your services without manual orchestration. Built-in step limit, step listener, and planning prompt.
 - **CDI integration** — assistants are injectable with `@Inject`. Tool beans are auto-wired via `tools = {...}` on the annotation.
 - **Global config + per-call override** — set API key once with `EasyAI.configure()`, override per assistant if needed
@@ -142,20 +173,23 @@ String result = agent.execute("Process order #42: verify stock, charge the card,
 
 If you are building on Jakarta EE, Spring AI is simply the wrong tool — it requires Spring Boot, Spring context, and Spring beans throughout your application. EasyAI is designed for the Jakarta EE runtime you already have.
 
-| | TabForge AI (EasyAI + DynTabs) | Spring AI |
+| | EasyAI | Spring AI |
 |---|---|---|
-| **Target runtime** | Jakarta EE — CDI, EJB, GlassFish, WildFly, Payara | Spring Boot only |
-| **Tool registration** | Zero annotations — pass any POJO or EJB directly | `@Tool` required on every method |
+| **Target runtime** | Jakarta EE — CDI, EJB, GlassFish, WildFly, Payara | Spring Boot / Spring context |
+| **Tool registration** | Zero annotations — pass any POJO or EJB, all public methods become tools | `@Tool` on each method, or a per-method `MethodToolCallback` |
 | **EJB bean as tool** | Built-in — `@Stateless`, `@Stateful`, `@Singleton` work as-is, container services preserved | Not supported |
-| **Custom CDI scope** | `@TabScoped` — one bean instance per open browser tab | Not applicable |
 | **AI config** | Single `easyai.properties` file + `EasyAI.configure()` | `application.properties` + Spring bean wiring |
-| **RAG from byte[]** | `DocumentSource.of("name.pdf", bytes)` — one line | Requires custom `DocumentReader` implementation |
+| **RAG from byte[]** | `DocumentSource.of("name.pdf", bytes)` — one line that parses, splits, and embeds | `TikaDocumentReader(ByteArrayResource)` exists, but you assemble the reader → splitter → embedding → store pipeline yourself |
+| **Persistent vector store (Milvus)** | Two one-liners — `indexer().toMilvus(...).index(...)` to write, `.withMilvus(...)` to query; local embedding model included | `MilvusVectorStore` bean (needs a `MilvusServiceClient` + `EmbeddingModel`) wired manually, plus the ETL pipeline |
+| **Structured extraction** | `EasyAI.extract(T.class).from(text or PDF)` — parses the document, extracts, retries, optional Bean Validation, in one call | `.entity(T.class)` converts text to an object, but document parsing, retries, and validation are on you |
 | **CDI injection** | `@Inject SupportBot bot` | `@Autowired` (Spring context only) |
-| **Simple chat** | `EasyAI.chat().build()` — one line, no interface needed | Requires `ChatClient` setup |
-| **Multi-step agent** | `EasyAI.agent()` — built-in, fully managed | Manual orchestration loop required |
-| **Agent safety limit** | `withMaxSteps(n)` — hard cap on tool calls, returns final answer when reached | No built-in limit — runaway agents possible |
-| **Agent execution trace** | `withStepListener(step -> ...)` — typed callback with tool name, args, result per step | Debug logging only — no programmatic hook |
-| **Agent planning prompt** | `withPlanningPrompt(true)` — instructs the model to plan before acting | Not provided |
+| **Simple chat** | `EasyAI.chat().build()` — one line, no interface needed | `ChatClient` builder + a `ChatModel` bean |
+| **Multi-step agent** | `EasyAI.agent()` — built-in, fully managed | Tool calls auto-execute, but no first-class agent (no step cap, typed trace, or planning toggle) |
+| **Agent safety limit** | `withMaxSteps(n)` — hard cap on tool calls, returns a final answer when reached | No built-in cap on automatic tool-calling — needs a custom advisor or a manual loop |
+| **Agent execution trace** | `withStepListener(step -> ...)` — typed callback with tool name, args, and result per step | Via custom advisors or Micrometer observation — no typed per-step callback out of the box |
+| **Agent planning prompt** | `withPlanningPrompt(true)` — instructs the model to plan before acting | Write your own system prompt — no built-in toggle |
+
+<sub>Comparison reflects Spring AI 2.0.0-M8 (May 2026). Spring AI is a capable, broad framework; the point here is fit for the **Jakarta EE** runtime and the amount of wiring each task takes — not that Spring AI can't do these things. The tool-call cap gap is tracked upstream in [spring-ai#3333](https://github.com/spring-projects/spring-ai/issues/3333).</sub>
 
 EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps. Just call `.build()` directly, no container needed.
 
@@ -166,7 +200,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 - Java 21+
 - Jakarta EE 11+ (CDI 4, EJB 4)
 - PrimeFaces 13+ *(DynTabs module only)*
-- LangChain4J 1.0.0-beta2 *(included transitively)*
+- LangChain4J 1.15.1 *(included transitively)*
 
 ---
 
@@ -182,7 +216,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>1.1.0</version>
+    <version>2.0.0</version>
 </dependency>
 ```
 

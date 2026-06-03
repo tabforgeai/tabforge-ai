@@ -8,21 +8,21 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.Test;
 
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 
 class ConversationTest {
 
     @Test
     void sendReturnsModelResponse() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("Hello! How can I help?"))
                         .build());
 
         Conversation conversation = new ConversationBuilder()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         String response = conversation.send("Hello");
@@ -31,14 +31,14 @@ class ConversationTest {
 
     @Test
     void sendWithSystemMessage() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("I am a helpful assistant!"))
                         .build());
 
         Conversation conversation = new ConversationBuilder()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withSystemMessage("You are a helpful assistant")
                 .build();
 
@@ -48,7 +48,7 @@ class ConversationTest {
 
     @Test
     void sendWithMemory() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("Response 1"))
@@ -58,7 +58,7 @@ class ConversationTest {
                         .build());
 
         Conversation conversation = new ConversationBuilder()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withMemory(10)
                 .build();
 

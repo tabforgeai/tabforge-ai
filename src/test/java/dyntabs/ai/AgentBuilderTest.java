@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dyntabs.ai.agent.AgentStep;
@@ -57,10 +57,10 @@ class AgentBuilderTest {
 
     @Test
     void buildsAgentSuccessfully() {
-        ChatLanguageModel mockModel = modelThatAnswers("Task done.");
+        ChatModel mockModel = modelThatAnswers("Task done.");
 
         EasyAgent agent = EasyAI.agent()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         assertThat(agent).isNotNull();
@@ -68,10 +68,10 @@ class AgentBuilderTest {
 
     @Test
     void agentExecutesSimpleTask() {
-        ChatLanguageModel mockModel = modelThatAnswers("Task completed successfully.");
+        ChatModel mockModel = modelThatAnswers("Task completed successfully.");
 
         EasyAgent agent = EasyAI.agent()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         String result = agent.execute("Do something simple.");
@@ -80,10 +80,10 @@ class AgentBuilderTest {
 
     @Test
     void agentWorksWithNoServices() {
-        ChatLanguageModel mockModel = modelThatAnswers("No tools needed.");
+        ChatModel mockModel = modelThatAnswers("No tools needed.");
 
         EasyAgent agent = EasyAI.agent()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         assertThat(agent.execute("Answer directly.")).isEqualTo("No tools needed.");
@@ -91,10 +91,10 @@ class AgentBuilderTest {
 
     @Test
     void withSystemMessage_usesCustomMessage() {
-        ChatLanguageModel mockModel = modelThatAnswers("OK");
+        ChatModel mockModel = modelThatAnswers("OK");
 
         EasyAgent agent = EasyAI.agent()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withSystemMessage("Custom agent instructions.")
                 .build();
 
@@ -104,10 +104,10 @@ class AgentBuilderTest {
 
     @Test
     void withPlanningPromptTrue_buildSucceeds() {
-        ChatLanguageModel mockModel = modelThatAnswers("Plan executed.");
+        ChatModel mockModel = modelThatAnswers("Plan executed.");
 
         EasyAgent agent = EasyAI.agent()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withPlanningPrompt(true)
                 .build();
 
@@ -116,10 +116,10 @@ class AgentBuilderTest {
 
     @Test
     void withPlanningPromptAndCustomMessage_buildSucceeds() {
-        ChatLanguageModel mockModel = modelThatAnswers("Combined.");
+        ChatModel mockModel = modelThatAnswers("Combined.");
 
         EasyAgent agent = EasyAI.agent()
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withPlanningPrompt(true)
                 .withSystemMessage("Additional domain instructions.")
                 .build();
@@ -136,13 +136,13 @@ class AgentBuilderTest {
         OrderService orderService = new OrderService();
 
         // First call: model requests tool; second call: model gives final answer
-        ChatLanguageModel mockModel = modelThatCallsTool(
+        ChatModel mockModel = modelThatCallsTool(
                 "getOrderStatus", "{\"orderId\": \"123\"}",
                 "Order 123 is in transit. Your order will arrive tomorrow.");
 
         EasyAgent agent = EasyAI.agent()
                 .withServices(orderService)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         String result = agent.execute("What is the status of order 123?");
@@ -155,14 +155,14 @@ class AgentBuilderTest {
         List<AgentStep> capturedSteps = new ArrayList<>();
         StepListener listener = capturedSteps::add;
 
-        ChatLanguageModel mockModel = modelThatCallsTool(
+        ChatModel mockModel = modelThatCallsTool(
                 "getOrderStatus", "{\"orderId\": \"42\"}",
                 "Done.");
 
         EasyAgent agent = EasyAI.agent()
                 .withServices(orderService)
                 .withStepListener(listener)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         agent.execute("Check order 42.");
@@ -181,7 +181,7 @@ class AgentBuilderTest {
         List<AgentStep> capturedSteps = new ArrayList<>();
 
         // Model calls tool twice, then answers
-        ChatLanguageModel mockModel = modelThatCallsToolTwice(
+        ChatModel mockModel = modelThatCallsToolTwice(
                 "getOrderStatus", "{\"orderId\": \"1\"}",
                 "getOrderStatus", "{\"orderId\": \"2\"}",
                 "Both orders checked.");
@@ -189,7 +189,7 @@ class AgentBuilderTest {
         EasyAgent agent = EasyAI.agent()
                 .withServices(orderService)
                 .withStepListener(capturedSteps::add)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         agent.execute("Check orders 1 and 2.");
@@ -204,14 +204,14 @@ class AgentBuilderTest {
         FailingService failingService = new FailingService();
         List<AgentStep> capturedSteps = new ArrayList<>();
 
-        ChatLanguageModel mockModel = modelThatCallsTool(
+        ChatModel mockModel = modelThatCallsTool(
                 "alwaysFails", "{\"input\": \"test\"}",
                 "I was unable to complete the request due to a service error.");
 
         EasyAgent agent = EasyAI.agent()
                 .withServices(failingService)
                 .withStepListener(capturedSteps::add)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         agent.execute("Call the failing service.");
@@ -229,7 +229,7 @@ class AgentBuilderTest {
         List<AgentStep> capturedSteps = new ArrayList<>();
 
         // Model keeps requesting tool calls; agent must stop at maxSteps=2
-        ChatLanguageModel mockModel = modelThatKeepsCallingTool(
+        ChatModel mockModel = modelThatKeepsCallingTool(
                 "getOrderStatus", "{\"orderId\": \"1\"}",
                 "Final answer after being stopped.");
 
@@ -237,7 +237,7 @@ class AgentBuilderTest {
                 .withServices(orderService)
                 .withMaxSteps(2)
                 .withStepListener(capturedSteps::add)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         agent.execute("Keep checking the order.");
@@ -256,8 +256,8 @@ class AgentBuilderTest {
     // -------------------------------------------------------------------------
 
     /** Creates a mock model that immediately returns a plain text answer. */
-    private static ChatLanguageModel modelThatAnswers(String answer) {
-        ChatLanguageModel mock = mock(ChatLanguageModel.class);
+    private static ChatModel modelThatAnswers(String answer) {
+        ChatModel mock = mock(ChatModel.class);
         when(mock.chat(any(ChatRequest.class)))
                 .thenReturn(chatResponse(answer));
         return mock;
@@ -268,9 +268,9 @@ class AgentBuilderTest {
      * 1st call → requests one tool call
      * 2nd call → returns the final answer
      */
-    private static ChatLanguageModel modelThatCallsTool(
+    private static ChatModel modelThatCallsTool(
             String toolName, String arguments, String finalAnswer) {
-        ChatLanguageModel mock = mock(ChatLanguageModel.class);
+        ChatModel mock = mock(ChatModel.class);
         when(mock.chat(any(ChatRequest.class)))
                 .thenReturn(toolCallResponse(toolName, arguments))
                 .thenReturn(chatResponse(finalAnswer));
@@ -283,11 +283,11 @@ class AgentBuilderTest {
      * 2nd call → requests tool call B
      * 3rd call → returns the final answer
      */
-    private static ChatLanguageModel modelThatCallsToolTwice(
+    private static ChatModel modelThatCallsToolTwice(
             String tool1, String args1,
             String tool2, String args2,
             String finalAnswer) {
-        ChatLanguageModel mock = mock(ChatLanguageModel.class);
+        ChatModel mock = mock(ChatModel.class);
         when(mock.chat(any(ChatRequest.class)))
                 .thenReturn(toolCallResponse(tool1, args1))
                 .thenReturn(toolCallResponse(tool2, args2))
@@ -299,9 +299,9 @@ class AgentBuilderTest {
      * Creates a mock model that keeps requesting the same tool call on every
      * invocation, until it finally returns the final answer (used to test maxSteps).
      */
-    private static ChatLanguageModel modelThatKeepsCallingTool(
+    private static ChatModel modelThatKeepsCallingTool(
             String toolName, String arguments, String finalAnswer) {
-        ChatLanguageModel mock = mock(ChatLanguageModel.class);
+        ChatModel mock = mock(ChatModel.class);
         when(mock.chat(any(ChatRequest.class)))
                 .thenReturn(toolCallResponse(toolName, arguments))
                 .thenReturn(toolCallResponse(toolName, arguments))

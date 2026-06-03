@@ -110,7 +110,19 @@ public final class RagEngine {
                 .build();
     }
 
-    private static List<Document> parseDocumentSources(List<DocumentSource> sources) {
+    /**
+     * Parses in-memory document sources (byte arrays) into LangChain4J {@link Document}s
+     * using Apache Tika.
+     *
+     * <p>Shared loader: called by the in-memory RAG path here in {@code RagEngine} and by
+     * the Milvus ingestion path ({@link dyntabs.ai.EasyIndexer#index(DocumentSource...)}),
+     * so byte-array documents are parsed identically whether they end up in memory or in
+     * Milvus.</p>
+     *
+     * @param sources the documents as byte arrays (from a DMS, DB BLOB, upload, etc.)
+     * @return the parsed documents; any source that fails to parse is logged and skipped
+     */
+    public static List<Document> parseDocumentSources(List<DocumentSource> sources) {
         List<Document> documents = new ArrayList<>();
         ApacheTikaDocumentParser parser = new ApacheTikaDocumentParser();
 
@@ -128,7 +140,19 @@ public final class RagEngine {
         return documents;
     }
 
-    private static List<Document> loadDocuments(String[] sources) {
+    /**
+     * Loads documents from path-based sources (classpath, file system, or relative paths)
+     * into LangChain4J {@link Document}s.
+     *
+     * <p>Shared loader: called by the annotation/programmatic RAG paths here in
+     * {@code RagEngine} and by the Milvus ingestion path
+     * ({@link dyntabs.ai.EasyIndexer#index(String...)}), so a {@code "classpath:"},
+     * {@code "file:"}, or bare path string resolves the same way regardless of destination.</p>
+     *
+     * @param sources one or more paths, each optionally prefixed with {@code classpath:} or {@code file:}
+     * @return the loaded documents; any source that fails to load is logged and skipped
+     */
+    public static List<Document> loadDocuments(String[] sources) {
         List<Document> documents = new ArrayList<>();
 
         for (String source : sources) {

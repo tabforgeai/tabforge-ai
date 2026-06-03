@@ -8,7 +8,7 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.Test;
 
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dyntabs.ai.annotation.EasyAIAssistant;
 
@@ -26,14 +26,14 @@ class AssistantBuilderTest {
 
     @Test
     void buildsAssistantProxy() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("Test response"))
                         .build());
 
         TestBot bot = EasyAI.assistant(TestBot.class)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         assertThat(bot).isNotNull();
@@ -43,7 +43,7 @@ class AssistantBuilderTest {
 
     @Test
     void readsSystemMessageFromAnnotation() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("OK"))
@@ -51,7 +51,7 @@ class AssistantBuilderTest {
 
         // This should not throw - the system message is read from @EasyAIAssistant
         TestBot bot = EasyAI.assistant(TestBot.class)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         assertThat(bot).isNotNull();
@@ -59,14 +59,14 @@ class AssistantBuilderTest {
 
     @Test
     void systemMessageCanBeOverridden() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("OK"))
                         .build());
 
         TestBot bot = EasyAI.assistant(TestBot.class)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withSystemMessage("Overridden system message")
                 .build();
 
@@ -75,14 +75,14 @@ class AssistantBuilderTest {
 
     @Test
     void worksWithoutSystemMessage() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("OK"))
                         .build());
 
         SimpleBotNoSystemMessage bot = EasyAI.assistant(SimpleBotNoSystemMessage.class)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .build();
 
         assertThat(bot).isNotNull();

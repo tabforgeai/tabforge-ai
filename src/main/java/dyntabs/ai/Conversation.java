@@ -2,7 +2,7 @@ package dyntabs.ai;
 
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
 
 /**
@@ -53,9 +53,9 @@ public class Conversation {
         String chat(String message);
     }
 
-    Conversation(ChatLanguageModel model, String systemMessage, int memorySize) {
+    Conversation(ChatModel model, String systemMessage, int memorySize) {
         AiServices<ChatBot> serviceBuilder = AiServices.builder(ChatBot.class)
-                .chatLanguageModel(model);
+                .chatModel(model);
 
         if (memorySize > 0) {
             ChatMemory memory = MessageWindowChatMemory.withMaxMessages(memorySize);

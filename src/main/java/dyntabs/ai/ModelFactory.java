@@ -1,10 +1,10 @@
 package dyntabs.ai;
 
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 
 /**
- * Factory that creates {@link ChatLanguageModel} instances based on {@link EasyAIConfig}.
+ * Factory that creates {@link ChatModel} instances based on {@link EasyAIConfig}.
  * Supports OpenAI and Ollama providers.
  */
 public final class ModelFactory {
@@ -12,7 +12,7 @@ public final class ModelFactory {
     private ModelFactory() {
     }
 
-    public static ChatLanguageModel create(EasyAIConfig config) {
+    public static ChatModel create(EasyAIConfig config) {
         String provider = config.provider() != null ? config.provider().toLowerCase() : "openai";
 
         return switch (provider) {
@@ -22,7 +22,7 @@ public final class ModelFactory {
         };
     }
 
-    private static ChatLanguageModel createOpenAI(EasyAIConfig config) {
+    private static ChatModel createOpenAI(EasyAIConfig config) {
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder();
 
         if (config.apiKey() != null) {
@@ -44,7 +44,7 @@ public final class ModelFactory {
         return builder.build();
     }
 
-    private static ChatLanguageModel createOllama(EasyAIConfig config) {
+    private static ChatModel createOllama(EasyAIConfig config) {
         // Ollama uses OpenAI-compatible API, so we can reuse the OpenAI model
         // with a different base URL (default: http://localhost:11434/v1/)
         OpenAiChatModel.OpenAiChatModelBuilder builder = OpenAiChatModel.builder();

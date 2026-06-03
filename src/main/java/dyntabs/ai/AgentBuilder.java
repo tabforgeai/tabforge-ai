@@ -9,7 +9,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.tool.ToolExecutor;
 import dyntabs.ai.agent.AgentStep;
@@ -59,7 +59,7 @@ public class AgentBuilder {
     private String customSystemMessage;
     private StepListener stepListener;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
-    private ChatLanguageModel externalModel;
+    private ChatModel externalModel;
 
     AgentBuilder() {}
 
@@ -197,13 +197,13 @@ public class AgentBuilder {
     }
 
     /**
-     * Uses the given {@link ChatLanguageModel} directly, bypassing
+     * Uses the given {@link ChatModel} directly, bypassing
      * {@code easyai.properties} and {@code EasyAI.configure()}.
      *
      * @param model the model to use
      * @return this builder
      */
-    public AgentBuilder withChatLanguageModel(ChatLanguageModel model) {
+    public AgentBuilder withChatModel(ChatModel model) {
         this.externalModel = model;
         return this;
     }
@@ -214,13 +214,13 @@ public class AgentBuilder {
      * @return a ready-to-use agent
      */
     public EasyAgent build() {
-        ChatLanguageModel model = externalModel != null
+        ChatModel model = externalModel != null
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
 
         AiServices<EasyAgent.AgentTask> serviceBuilder = AiServices
                 .builder(EasyAgent.AgentTask.class)
-                .chatLanguageModel(model);
+                .chatModel(model);
 
         // Memory sized to accommodate a full multi-step conversation
         ChatMemory memory = MessageWindowChatMemory.withMaxMessages(maxSteps * 4);

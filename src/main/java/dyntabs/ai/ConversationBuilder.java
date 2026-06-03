@@ -1,6 +1,6 @@
 package dyntabs.ai;
 
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 
 /**
  * Builder for creating {@link Conversation} instances.
@@ -42,7 +42,7 @@ public class ConversationBuilder {
     private int memorySize = 0;
     private String systemMessage;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
-    private ChatLanguageModel externalModel;
+    private ChatModel externalModel;
 
     ConversationBuilder() {
     }
@@ -159,15 +159,15 @@ public class ConversationBuilder {
     }
 
     /**
-     * Injects an externally created ChatLanguageModel.
+     * Injects an externally created ChatModel.
      *
      * <p>Useful for testing with a mock model, or when you need full control
      * over model creation.</p>
      *
-     * @param model a pre-built ChatLanguageModel instance
+     * @param model a pre-built ChatModel instance
      * @return this builder
      */
-    public ConversationBuilder withChatLanguageModel(ChatLanguageModel model) {
+    public ConversationBuilder withChatModel(ChatModel model) {
         this.externalModel = model;
         return this;
     }
@@ -178,7 +178,7 @@ public class ConversationBuilder {
      * @return a new Conversation instance
      */
     public Conversation build() {
-        ChatLanguageModel model = externalModel != null
+        ChatModel model = externalModel != null
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
 

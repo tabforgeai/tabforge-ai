@@ -8,7 +8,7 @@ import static org.mockito.Mockito.when;
 import org.junit.jupiter.api.Test;
 
 import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import java.util.List;
 
@@ -49,14 +49,14 @@ class RagEngineTest {
 
     @Test
     void withRAGProgrammaticOnAssistantBuilder() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("Answer from RAG"))
                         .build());
 
         TestBot bot = EasyAI.assistant(TestBot.class)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withRAG("classpath:test-document.txt")
                 .build();
 
@@ -92,14 +92,14 @@ class RagEngineTest {
 
     @Test
     void withRAGDocumentSourceOnAssistantBuilder() {
-        ChatLanguageModel mockModel = mock(ChatLanguageModel.class);
+        ChatModel mockModel = mock(ChatModel.class);
         when(mockModel.chat(any(dev.langchain4j.model.chat.request.ChatRequest.class)))
                 .thenReturn(ChatResponse.builder()
                         .aiMessage(AiMessage.from("You get 25 vacation days"))
                         .build());
 
         TestBot bot = EasyAI.assistant(TestBot.class)
-                .withChatLanguageModel(mockModel)
+                .withChatModel(mockModel)
                 .withRAG(DocumentSource.ofText("policy", "All employees get 25 vacation days per year."))
                 .build();
 
