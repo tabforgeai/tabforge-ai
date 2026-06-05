@@ -5,6 +5,9 @@ import java.util.stream.Collectors;
 
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.model.chat.ChatModel;
+import dyntabs.ai.event.EasyAIEvent.Source;
+import dyntabs.ai.event.EasyAIListener;
+import dyntabs.ai.event.EventEmitter;
 import dyntabs.ai.extract.ExtractionEngine;
 import dyntabs.ai.extract.ExtractionException;
 import dyntabs.ai.rag.DocumentSource;
@@ -53,6 +56,7 @@ public class ExtractionBuilder<T> {
     private ChatModel externalModel;
     private int maxRetries = DEFAULT_RETRIES;
     private boolean validate = false;
+    private EasyAIListener eventListener;
 
     /**
      * Package-private: instances come from {@link EasyAI#extract(Class)}. Extraction defaults
@@ -163,6 +167,26 @@ public class ExtractionBuilder<T> {
     }
 
     /**
+     * Registers a listener that receives a live {@link dyntabs.ai.event.EasyAIEvent} stream as the
+     * extraction runs: {@link dyntabs.ai.event.EasyAIEvent.Phase#STARTED} when it begins, a
+     * {@link dyntabs.ai.event.EasyAIEvent.Phase#PROGRESS} when the model is queried, a
+     * {@link dyntabs.ai.event.EasyAIEvent.Phase#RETRY} for each re-attempt on malformed JSON, and
+     * a final {@link dyntabs.ai.event.EasyAIEvent.Phase#RESULT} (or
+     * {@link dyntabs.ai.event.EasyAIEvent.Phase#ERROR}).
+     *
+     * <p><b>Familiar analogy:</b> a "your form is being processed" status bar — you see it parse,
+     * stumble, retry, and finally hand you the finished, typed object.</p>
+     *
+     * @param eventListener the listener to receive extraction events (may be {@code null})
+     * @return this builder
+     * @see dyntabs.ai.event.EasyAIListener
+     */
+    public ExtractionBuilder<T> withEventListener(EasyAIListener eventListener) {
+        this.eventListener = eventListener;
+        return this;
+    }
+
+    /**
      * Extracts the target type from a plain text string.
      *
      * <p>Terminal step of the {@code EasyAI.extract(Type.class).from(...)} chain. Resolves the
@@ -177,7 +201,8 @@ public class ExtractionBuilder<T> {
         ChatModel model = externalModel != null
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
-        return ExtractionEngine.extract(model, type, text, maxRetries, validate);
+        EventEmitter emitter = new EventEmitter(Source.EXTRACT, eventListener);
+        return ExtractionEngine.extract(model, type, text, maxRetries, validate, emitter);
     }
 
     /**

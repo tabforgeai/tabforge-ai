@@ -21,6 +21,9 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.request.ChatRequest;
 
+import dyntabs.ai.event.EasyAIEvent.Source;
+import dyntabs.ai.event.EventEmitter;
+
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
@@ -87,8 +90,36 @@ public final class ExtractionEngine {
      */
     public static <T> T extract(ChatModel model, Class<T> type, String content,
                                 int maxRetries, boolean validate) {
+        return extract(model, type, content, maxRetries, validate,
+                new EventEmitter(Source.EXTRACT, null));
+    }
+
+    /**
+     * Same as {@link #extract(ChatModel, Class, String, int, boolean)}, but additionally narrates
+     * its progress to the given {@link EventEmitter}.
+     *
+     * <p>Called by {@link dyntabs.ai.ExtractionBuilder#from(String)}. Emits a STARTED event up
+     * front, a PROGRESS event when the model is queried, a RETRY event for each re-attempt on
+     * malformed JSON, and a terminal RESULT (success) or ERROR event. The emitter is a no-op when
+     * no listener was registered, so this path is free when nobody is observing.</p>
+     *
+     * @param model      the chat model to query (real or a test mock)
+     * @param type       the class to extract (record or POJO)
+     * @param content    the source text to extract from
+     * @param maxRetries how many additional attempts on unparseable JSON (0 = a single attempt)
+     * @param validate   whether to run Jakarta Bean Validation on the result
+     * @param emitter    the live-event emitter (never {@code null}; pass a no-op emitter to disable)
+     * @param <T>        the target type
+     * @return a populated instance of {@code type}
+     * @throws ExtractionException if no valid JSON could be parsed within the retries, or if
+     *                             validation is enabled and the result is invalid
+     */
+    public static <T> T extract(ChatModel model, Class<T> type, String content,
+                                int maxRetries, boolean validate, EventEmitter emitter) {
         String schema = SchemaDescriber.describe(type);
         String systemPrompt = buildSystemPrompt(schema);
+
+        emitter.started("Extracting " + type.getSimpleName());
 
         String lastRaw = null;
         JsonSyntaxException lastError = null;
@@ -98,9 +129,13 @@ public final class ExtractionEngine {
             messages.add(SystemMessage.from(systemPrompt));
             messages.add(UserMessage.from(content));
             if (attempt > 0 && lastRaw != null) {
+                emitter.retry("Retrying extraction",
+                        "attempt " + (attempt + 1) + " — previous output was not valid JSON");
                 messages.add(UserMessage.from(
                         "Your previous answer was not valid JSON for the schema. "
                         + "Return ONLY the JSON object, nothing else. Previous answer was:\n" + lastRaw));
+            } else {
+                emitter.progress("Querying model", "target type: " + type.getSimpleName());
             }
 
             ChatRequest request = ChatRequest.builder().messages(messages).build();
@@ -112,8 +147,14 @@ public final class ExtractionEngine {
                     throw new JsonSyntaxException("Model returned JSON null");
                 }
                 if (validate) {
-                    validate(result);
+                    try {
+                        validate(result);
+                    } catch (ExtractionException ve) {
+                        emitter.error("Validation failed", ve.getMessage());
+                        throw ve;
+                    }
                 }
+                emitter.result("Extracted " + type.getSimpleName(), null);
                 return result;
             } catch (JsonSyntaxException e) {
                 lastError = e;
@@ -121,6 +162,8 @@ public final class ExtractionEngine {
             }
         }
 
+        emitter.error("Extraction failed",
+                "no valid JSON after " + (maxRetries + 1) + " attempt(s)");
         throw new ExtractionException(
                 "Could not extract " + type.getSimpleName() + " after " + (maxRetries + 1)
                 + " attempt(s). Last model output was:\n" + lastRaw, lastError);

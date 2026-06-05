@@ -16,6 +16,10 @@ import dyntabs.ai.agent.AgentStep;
 import dyntabs.ai.agent.StepListener;
 import dyntabs.ai.assistant.ToolIntrospector;
 import dyntabs.ai.assistant.ToolMethod;
+import dyntabs.ai.event.EasyAIEvent.Source;
+import dyntabs.ai.event.EasyAIEvent.Status;
+import dyntabs.ai.event.EasyAIListener;
+import dyntabs.ai.event.EventEmitter;
 
 /**
  * Builder for creating an {@link EasyAgent} that autonomously plans and
@@ -58,6 +62,7 @@ public class AgentBuilder {
     private boolean planningPrompt = false;
     private String customSystemMessage;
     private StepListener stepListener;
+    private EasyAIListener eventListener;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
     private ChatModel externalModel;
 
@@ -161,6 +166,43 @@ public class AgentBuilder {
     }
 
     /**
+     * Registers a transport-agnostic {@link EasyAIListener} that receives a richer, live
+     * stream of {@link dyntabs.ai.event.EasyAIEvent}s as the agent runs.
+     *
+     * <p>This is the modern, library-wide observability hook shared by every EasyAI capability,
+     * and it is strictly additive to {@link #withStepListener(StepListener)} — you may use either,
+     * both, or neither. Compared to the older {@code StepListener} (which fires only <em>after</em>
+     * each tool returns), the event listener also emits:</p>
+     * <ul>
+     *   <li>{@link dyntabs.ai.event.EasyAIEvent.Phase#STARTED} when {@code execute()} begins,</li>
+     *   <li>{@link dyntabs.ai.event.EasyAIEvent.Phase#STEP_STARTED} <em>before</em> each tool runs
+     *       (so a UI can show a spinning "running" row that later resolves), and</li>
+     *   <li>{@link dyntabs.ai.event.EasyAIEvent.Phase#FINISHED} /
+     *       {@link dyntabs.ai.event.EasyAIEvent.Phase#ERROR} when the task ends.</li>
+     * </ul>
+     *
+     * <p><b>Familiar analogy:</b> {@code StepListener} is a receipt printed after each purchase;
+     * {@code EasyAIListener} is the live store-camera feed showing the whole shopping trip,
+     * including the moments between purchases.</p>
+     *
+     * <pre>{@code
+     * EasyAgent agent = EasyAI.agent()
+     *     .withServices(orderService)
+     *     .withEventListener(e -> log.info("{}", e))   // started → step_started → step → finished
+     *     .build();
+     * }</pre>
+     *
+     * @param eventListener the listener to receive the agent's live event stream (may be {@code null})
+     * @return this builder
+     * @see dyntabs.ai.event.EasyAIEvent
+     * @see dyntabs.ai.event.EasyAIListener
+     */
+    public AgentBuilder withEventListener(EasyAIListener eventListener) {
+        this.eventListener = eventListener;
+        return this;
+    }
+
+    /**
      * Sets a custom system message for the agent.
      *
      * <p>If {@link #withPlanningPrompt(boolean)} is also enabled,
@@ -218,6 +260,9 @@ public class AgentBuilder {
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
 
+        // Live event stream (no-op when no listener was registered).
+        EventEmitter emitter = new EventEmitter(Source.AGENT, eventListener);
+
         AiServices<EasyAgent.AgentTask> serviceBuilder = AiServices
                 .builder(EasyAgent.AgentTask.class)
                 .chatModel(model);
@@ -249,6 +294,9 @@ public class AgentBuilder {
                                 + "Please provide a final answer based on the information gathered so far.";
                     }
 
+                    // Pre-step: announce the tool dispatch before it runs (spinner row in a UI).
+                    emitter.stepStarted(tm.specification().name(), toolExecutionRequest.arguments());
+
                     String result;
                     try {
                         Object[] args = parseArguments(tm, toolExecutionRequest.arguments());
@@ -275,6 +323,10 @@ public class AgentBuilder {
                                 result));
                     }
 
+                    // Post-step: the tool returned — resolve the row to success or error.
+                    emitter.step(tm.specification().name(), result,
+                            result.startsWith("TOOL_ERROR") ? Status.ERROR : Status.SUCCESS);
+
                     return result;
                 });
             }
@@ -282,7 +334,7 @@ public class AgentBuilder {
             serviceBuilder.tools(toolMap);
         }
 
-        return new EasyAgent(serviceBuilder.build());
+        return new EasyAgent(serviceBuilder.build(), emitter);
     }
 
     private String resolveSystemMessage() {

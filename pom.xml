@@ -7,7 +7,7 @@
 
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>2.0.0</version>
+    <version>2.1.0</version>
     <packaging>jar</packaging>
 
     <name>TabForge AI</name>
@@ -34,7 +34,7 @@
         <connection>scm:git:https://github.com/tabforgeai/tabforge-ai.git</connection>
         <developerConnection>scm:git:https://github.com/tabforgeai/tabforge-ai.git</developerConnection>
         <url>https://github.com/tabforgeai/tabforge-ai</url>
-        <tag>v2.0.0</tag>
+        <tag>v2.1.0</tag>
     </scm>
 
     <properties>

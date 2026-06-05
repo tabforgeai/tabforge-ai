@@ -1,5 +1,6 @@
 package dyntabs.ai;
 
+import dyntabs.ai.event.EasyAIListener;
 import dyntabs.ai.rag.MilvusConfig;
 
 /**
@@ -25,10 +26,41 @@ import dyntabs.ai.rag.MilvusConfig;
  */
 public class IndexerBuilder {
 
+    private EasyAIListener eventListener;
+
     /**
      * Package-private: instances come from {@link EasyAI#indexer()}.
      */
     IndexerBuilder() {
+    }
+
+    /**
+     * Registers a listener that receives a live {@link dyntabs.ai.event.EasyAIEvent} stream as
+     * documents are loaded, embedded, and upserted into the vector store.
+     *
+     * <p>Call this <em>before</em> {@code toMilvus(...)} so the destination indexer inherits it.
+     * The indexer emits {@link dyntabs.ai.event.EasyAIEvent.Phase#STARTED} when indexing begins,
+     * a {@link dyntabs.ai.event.EasyAIEvent.Phase#PROGRESS} event per source document and one for
+     * the store-upsert step, then {@link dyntabs.ai.event.EasyAIEvent.Phase#FINISHED} (or
+     * {@link dyntabs.ai.event.EasyAIEvent.Phase#ERROR}).</p>
+     *
+     * <p><b>Familiar analogy:</b> a parcel-tracking page for a bulk shipment — instead of only
+     * learning "all 200 boxes delivered" at the end, you watch each box move through the depot.</p>
+     *
+     * <pre>{@code
+     * int n = EasyAI.indexer()
+     *               .withEventListener(e -> log.info("{}", e))
+     *               .toMilvus("localhost", 19530, "documents")
+     *               .index("file:/data/policy.pdf", "classpath:faq.txt");
+     * }</pre>
+     *
+     * @param eventListener the listener to receive ingestion events (may be {@code null})
+     * @return this builder
+     * @see dyntabs.ai.event.EasyAIListener
+     */
+    public IndexerBuilder withEventListener(EasyAIListener eventListener) {
+        this.eventListener = eventListener;
+        return this;
     }
 
     /**
@@ -44,7 +76,7 @@ public class IndexerBuilder {
      * @return an {@link EasyIndexer} bound to that collection
      */
     public EasyIndexer toMilvus(String host, int port, String collectionName) {
-        return new EasyIndexer(MilvusConfig.of(host, port, collectionName));
+        return new EasyIndexer(MilvusConfig.of(host, port, collectionName), eventListener);
     }
 
     /**
@@ -56,7 +88,7 @@ public class IndexerBuilder {
      * @return an {@link EasyIndexer} bound to that collection
      */
     public EasyIndexer toMilvus(MilvusConfig config) {
-        return new EasyIndexer(config);
+        return new EasyIndexer(config, eventListener);
     }
 
     /**
@@ -70,6 +102,6 @@ public class IndexerBuilder {
      * @see MilvusConfig#fromProperties()
      */
     public EasyIndexer toMilvus() {
-        return new EasyIndexer(MilvusConfig.fromProperties());
+        return new EasyIndexer(MilvusConfig.fromProperties(), eventListener);
     }
 }

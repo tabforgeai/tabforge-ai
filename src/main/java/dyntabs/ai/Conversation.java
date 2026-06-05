@@ -4,6 +4,7 @@ import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
+import dyntabs.ai.event.EventEmitter;
 
 /**
  * A simple chat conversation with an AI model.
@@ -49,11 +50,16 @@ public class Conversation {
 
     private final ChatBot chatBot;
 
+    /** Live event stream for this conversation; never {@code null} (no-op without a listener). */
+    private final EventEmitter emitter;
+
     interface ChatBot {
         String chat(String message);
     }
 
-    Conversation(ChatModel model, String systemMessage, int memorySize) {
+    Conversation(ChatModel model, String systemMessage, int memorySize, EventEmitter emitter) {
+        this.emitter = emitter;
+
         AiServices<ChatBot> serviceBuilder = AiServices.builder(ChatBot.class)
                 .chatModel(model);
 
@@ -75,10 +81,23 @@ public class Conversation {
      * <p>If memory was enabled via {@code withMemory()}, the AI will remember
      * all previous messages in this conversation. Otherwise, each call is independent.</p>
      *
+     * <p>If an {@link dyntabs.ai.event.EasyAIListener} was registered via
+     * {@code EasyAI.chat().withEventListener(...)}, this brackets the call with a STARTED event,
+     * a RESULT event carrying the reply, and a FINISHED event (or an ERROR event if it throws).</p>
+     *
      * @param message the user's message (plain text)
      * @return the AI's response as a String
      */
     public String send(String message) {
-        return chatBot.chat(message);
+        emitter.started("Processing message");
+        try {
+            String reply = chatBot.chat(message);
+            emitter.result("Reply ready", reply);
+            emitter.finished("Done");
+            return reply;
+        } catch (RuntimeException e) {
+            emitter.error("Chat failed", e.getMessage());
+            throw e;
+        }
     }
 }

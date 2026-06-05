@@ -1,5 +1,7 @@
 package dyntabs.ai;
 
+import dyntabs.ai.event.EventEmitter;
+
 /**
  * An AI agent that autonomously plans and executes multi-step tasks
  * by orchestrating calls to your registered Java services.
@@ -62,8 +64,12 @@ public class EasyAgent {
 
     private final AgentTask agentTask;
 
-    EasyAgent(AgentTask agentTask) {
+    /** Live event stream for this agent; never {@code null} (a no-op when no listener was set). */
+    private final EventEmitter emitter;
+
+    EasyAgent(AgentTask agentTask, EventEmitter emitter) {
         this.agentTask = agentTask;
+        this.emitter = emitter;
     }
 
     /**
@@ -88,10 +94,23 @@ public class EasyAgent {
      * );
      * }</pre>
      *
+     * <p>If an {@link dyntabs.ai.event.EasyAIListener} was registered via
+     * {@code AgentBuilder.withEventListener(...)}, this method brackets the run with
+     * {@code STARTED} and {@code FINISHED} events (and an {@code ERROR} event if the run throws),
+     * with the individual tool-call events emitted in between.</p>
+     *
      * @param task a natural-language description of the task to perform
      * @return a natural-language summary of what was done and the final outcome
      */
     public String execute(String task) {
-        return agentTask.execute(task);
+        emitter.started("Planning task");
+        try {
+            String result = agentTask.execute(task);
+            emitter.finished("Task complete");
+            return result;
+        } catch (RuntimeException e) {
+            emitter.error("Agent failed", e.getMessage());
+            throw e;
+        }
     }
 }

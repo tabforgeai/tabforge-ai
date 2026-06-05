@@ -1,6 +1,9 @@
 package dyntabs.ai;
 
 import dev.langchain4j.model.chat.ChatModel;
+import dyntabs.ai.event.EasyAIEvent.Source;
+import dyntabs.ai.event.EasyAIListener;
+import dyntabs.ai.event.EventEmitter;
 
 /**
  * Builder for creating {@link Conversation} instances.
@@ -43,6 +46,7 @@ public class ConversationBuilder {
     private String systemMessage;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
     private ChatModel externalModel;
+    private EasyAIListener eventListener;
 
     ConversationBuilder() {
     }
@@ -173,6 +177,23 @@ public class ConversationBuilder {
     }
 
     /**
+     * Registers a listener that receives a live {@link dyntabs.ai.event.EasyAIEvent} stream around
+     * each {@link Conversation#send(String)}: a STARTED event, a RESULT event carrying the reply,
+     * and a FINISHED event (or an ERROR event on failure).
+     *
+     * <p><b>Familiar analogy:</b> a read-receipt-plus-typing-indicator for your AI call — you can
+     * see it pick up the message, think, and answer, instead of only the final reply appearing.</p>
+     *
+     * @param eventListener the listener to receive chat events (may be {@code null})
+     * @return this builder
+     * @see dyntabs.ai.event.EasyAIListener
+     */
+    public ConversationBuilder withEventListener(EasyAIListener eventListener) {
+        this.eventListener = eventListener;
+        return this;
+    }
+
+    /**
      * Builds and returns a ready-to-use {@link Conversation}.
      *
      * @return a new Conversation instance
@@ -182,7 +203,8 @@ public class ConversationBuilder {
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
 
-        return new Conversation(model, systemMessage, memorySize);
+        return new Conversation(model, systemMessage, memorySize,
+                new EventEmitter(Source.CHAT, eventListener));
     }
 
     // Priority: easyai.properties < EasyAI.configure() < builder .withXxx()

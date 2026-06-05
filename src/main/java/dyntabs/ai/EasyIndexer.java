@@ -2,6 +2,9 @@ package dyntabs.ai;
 
 import java.util.List;
 
+import dyntabs.ai.event.EasyAIEvent.Source;
+import dyntabs.ai.event.EasyAIListener;
+import dyntabs.ai.event.EventEmitter;
 import dyntabs.ai.rag.DocumentSource;
 import dyntabs.ai.rag.MilvusConfig;
 import dyntabs.ai.rag.MilvusEngine;
@@ -40,14 +43,17 @@ import dev.langchain4j.data.document.Document;
 public class EasyIndexer {
 
     private final MilvusConfig milvusConfig;
+    private final EasyAIListener eventListener;
 
     /**
      * Package-private: instances come from {@link IndexerBuilder#toMilvus}.
      *
-     * @param milvusConfig the resolved Milvus destination for this indexer
+     * @param milvusConfig  the resolved Milvus destination for this indexer
+     * @param eventListener optional live-event listener (may be {@code null})
      */
-    EasyIndexer(MilvusConfig milvusConfig) {
+    EasyIndexer(MilvusConfig milvusConfig, EasyAIListener eventListener) {
         this.milvusConfig = milvusConfig;
+        this.eventListener = eventListener;
     }
 
     /**
@@ -61,8 +67,22 @@ public class EasyIndexer {
      * @return the number of documents successfully ingested
      */
     public int index(String... sources) {
-        List<Document> documents = RagEngine.loadDocuments(sources);
-        return MilvusEngine.ingest(documents, milvusConfig);
+        EventEmitter emitter = new EventEmitter(Source.INDEXER, eventListener);
+        emitter.started("Indexing " + sources.length + " document(s)");
+        try {
+            for (String s : sources) {
+                emitter.progress("Loading document", s);
+            }
+            List<Document> documents = RagEngine.loadDocuments(sources);
+            emitter.progress("Embedding & upserting to Milvus",
+                    "collection '" + milvusConfig.collectionName() + "'");
+            int count = MilvusEngine.ingest(documents, milvusConfig);
+            emitter.finished("Indexed " + count + " document(s)");
+            return count;
+        } catch (RuntimeException e) {
+            emitter.error("Indexing failed", e.getMessage());
+            throw e;
+        }
     }
 
     /**
@@ -88,7 +108,21 @@ public class EasyIndexer {
      * @return the number of documents successfully ingested
      */
     public int index(List<DocumentSource> sources) {
-        List<Document> documents = RagEngine.parseDocumentSources(sources);
-        return MilvusEngine.ingest(documents, milvusConfig);
+        EventEmitter emitter = new EventEmitter(Source.INDEXER, eventListener);
+        emitter.started("Indexing " + sources.size() + " document(s)");
+        try {
+            for (DocumentSource ds : sources) {
+                emitter.progress("Loading document", ds.fileName());
+            }
+            List<Document> documents = RagEngine.parseDocumentSources(sources);
+            emitter.progress("Embedding & upserting to Milvus",
+                    "collection '" + milvusConfig.collectionName() + "'");
+            int count = MilvusEngine.ingest(documents, milvusConfig);
+            emitter.finished("Indexed " + count + " document(s)");
+            return count;
+        } catch (RuntimeException e) {
+            emitter.error("Indexing failed", e.getMessage());
+            throw e;
+        }
     }
 }

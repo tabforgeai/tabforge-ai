@@ -4,6 +4,8 @@ dyntabs.ai.agent
 dyntabs.ai.annotation
 dyntabs.ai.assistant
 dyntabs.ai.cdi
+dyntabs.ai.event
+dyntabs.ai.extract
 dyntabs.ai.rag
 dyntabs.annotation
 dyntabs.interfaces

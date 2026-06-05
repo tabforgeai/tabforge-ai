@@ -163,9 +163,34 @@ em.persist(inv);   // no AI from here on — it's just a typed object your code 
 - **Persistent vector store** — `EasyAI.indexer().toMilvus(...).index(...)` writes embeddings to Milvus once; `.withMilvus(...)` lets any assistant query them. Survives restarts, shared across sessions and server nodes. Local embedding model included (no API key, runs offline)
 - **Structured extraction** — `EasyAI.extract(Invoice.class).from(text or PDF)` returns a populated record/POJO. Parses the document, extracts, retries on malformed output, and optionally runs Jakarta Bean Validation — in one call
 - **Autonomous agent** — `EasyAI.agent()` executes multi-step tasks across your services without manual orchestration. Built-in step limit, step listener, and planning prompt.
+- **Live observability** *(new in 2.1)* — `.withEventListener(...)` streams an `EasyAIEvent` for every moment of an operation (started → tool call → result → finished). Transport-agnostic: log it, meter it, or push it to a live UI. See below.
 - **CDI integration** — assistants are injectable with `@Inject`. Tool beans are auto-wired via `tools = {...}` on the annotation.
 - **Global config + per-call override** — set API key once with `EasyAI.configure()`, override per assistant if needed
 - **Clean error messages** — `EasyAI.extractErrorMessage(e)` parses JSON error responses from OpenAI-compatible providers
+
+### Live observability (new in 2.1)
+
+EasyAI normally works silently and hands you a final answer. Add **one method** — `.withEventListener(listener)` — and it will instead *narrate itself* as it runs: an `EasyAIEvent` for "I started", "I'm calling tool X", "tool X returned", "I'm on document 7 of 200", "I finished". It works on `EasyAI.chat()`, `EasyAI.agent()`, `EasyAI.indexer()`, and `EasyAI.extract()`.
+
+```java
+EasyAgent agent = EasyAI.agent()
+        .withServices(orderService, paymentService)
+        .withEventListener(event ->
+            log.info("[{}] {} — {}", event.source(), event.phase(), event.title()))
+        .build();
+
+agent.execute("Order 2 laptops for U123, charge the card, schedule delivery");
+// [AGENT] STARTED — Planning task
+// [AGENT] STEP_STARTED — checkStock
+// [AGENT] STEP — checkStock
+// [AGENT] STEP_STARTED — processPayment
+// ...
+// [AGENT] FINISHED — Task complete
+```
+
+The key design choice: **`EasyAIEvent` knows nothing about HTTP, SSE, WebSockets, or any UI's JSON schema.** It is a plain immutable value (`source`, `phase`, `status`, `title`, `detail`, `toolName`, `sequence`, `timestamp`). *You* decide what to do with it — so the same event stream can feed a log file, a metrics counter, or a real-time dashboard without EasyAI ever depending on any of them.
+
+For the full **"wow"** — every chat turn and agent tool call rendered live in a browser Activity panel — the [**starter**](https://github.com/tabforgeai/tabforge-ai-starter) ships the ~150 lines of (entirely app-side) Server-Sent-Events plumbing that maps `EasyAIEvent` → UI. You never write that mapping into your library code; it stays in your app, exactly where transport belongs.
 
 ---
 
