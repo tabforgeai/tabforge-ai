@@ -126,6 +126,7 @@ public class DynTabRegistry {
 
             tab.setIncludePage(ann.includePage());
             tab.setCloseable(ann.closeable());
+            tab.setTrackActivity(ann.trackActivity());
 
             // Parameters - parse from "key=value" format
             if (ann.parameters().length > 0) {

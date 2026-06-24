@@ -1,6 +1,7 @@
 package dyntabs.ai;
 
 import dev.langchain4j.model.chat.ChatModel;
+import dyntabs.ai.activity.ActivityContext;
 import dyntabs.ai.event.EasyAIEvent.Source;
 import dyntabs.ai.event.EasyAIListener;
 import dyntabs.ai.event.EventEmitter;
@@ -47,6 +48,7 @@ public class ConversationBuilder {
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
     private ChatModel externalModel;
     private EasyAIListener eventListener;
+    private ActivityContext activityContext;
 
     ConversationBuilder() {
     }
@@ -194,6 +196,36 @@ public class ConversationBuilder {
     }
 
     /**
+     * Makes this conversation <em>ambient-activity aware</em>: before each {@link Conversation#send(String)}
+     * the given context is re-rendered and folded into the system message, so the model already knows
+     * what the user has recently been doing in the UI (and can resolve "this"/"that" without being told).
+     *
+     * <p><b>Familiar analogy:</b> handing your assistant a fresh one-line brief of "what you were just
+     * working on" right before every question — so you can say "cancel <em>that</em> order" and be
+     * understood.</p>
+     *
+     * <p>Typically you build the context from the per-tab activity store, e.g.:</p>
+     * <pre>{@code
+     * Conversation chat = EasyAI.chat()
+     *     .withSystemMessage("You are an order-desk assistant.")
+     *     .withActivityContext(ActivityContext.of(activityStore)
+     *         .forSession(sessionId).forTab(tabId).build())
+     *     .build();
+     * }</pre>
+     *
+     * <p>The context is combined with any {@link #withSystemMessage(String)} value by
+     * {@link SystemMessageComposer}; passing {@code null} simply leaves the feature off.</p>
+     *
+     * @param activityContext the ambient-activity descriptor to inject, or {@code null} to disable
+     * @return this builder
+     * @see dyntabs.ai.activity.ActivityContext
+     */
+    public ConversationBuilder withActivityContext(ActivityContext activityContext) {
+        this.activityContext = activityContext;
+        return this;
+    }
+
+    /**
      * Builds and returns a ready-to-use {@link Conversation}.
      *
      * @return a new Conversation instance
@@ -204,7 +236,7 @@ public class ConversationBuilder {
                 : ModelFactory.create(effectiveConfig());
 
         return new Conversation(model, systemMessage, memorySize,
-                new EventEmitter(Source.CHAT, eventListener));
+                new EventEmitter(Source.CHAT, eventListener), activityContext);
     }
 
     // Priority: easyai.properties < EasyAI.configure() < builder .withXxx()

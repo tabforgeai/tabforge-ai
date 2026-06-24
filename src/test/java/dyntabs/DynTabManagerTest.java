@@ -354,4 +354,51 @@ class DynTabManagerTest {
         verify(bean0).observeDynTabEvent(argThat(e -> "dynTabSelected".equals(e.getEventType())));
         verify(bean1).observeDynTabEvent(argThat(e -> "dynTabSelected".equals(e.getEventType())));
     }
+
+    // ---------------------------------------------------------------
+    // addTab — opt-in flags must survive the recycled-slot copy
+    // ---------------------------------------------------------------
+
+    /**
+     * Regression: {@code addTab} reuses a pre-allocated inactive tab slot and copies the registered
+     * tab's fields onto it. The {@code trackActivity} flag must be among them — otherwise navigation
+     * activity is never recorded for menu-opened tabs (the slot keeps its default {@code false}),
+     * even though the tab was declared {@code @DynTab(trackActivity = true)}.
+     */
+    @Test
+    void addTab_copiesTrackActivityToRecycledSlot() throws Exception {
+        // addTab() consults config.getMaxNumberOfTabs(); inject a minimal config into the tracker.
+        DynTabConfig config = new DynTabConfig() {
+            @Override
+            public List<String> getInitialTabNames() {
+                return List.of();
+            }
+
+            @Override
+            public int getMaxNumberOfTabs() {
+                return 7;
+            }
+        };
+        Field configField = DynTabTracker.class.getDeclaredField("config");
+        configField.setAccessible(true);
+        configField.set(tracker, config);
+
+        // A registered tab that opted into activity tracking, with a stub bean (no CDI container needed).
+        DynTab toAdd = new DynTab("ignored", "orders.xhtml");
+        toAdd.setUniqueIdentifier("Orders");
+        toAdd.setTitle("Orders");
+        toAdd.setTrackActivity(true);
+        DyntabBeanInterface bean = mock(DyntabBeanInterface.class);
+        toAdd.setCdiBean(bean);
+
+        manager.addTab(toAdd);
+
+        // The first inactive slot (r3) becomes the live tab and must carry trackActivity over.
+        DynTab slot = tracker.getTabMap().get("r3");
+        assertThat(slot.isActive()).isTrue();
+        assertThat(slot.isTrackActivity())
+                .as("addTab must copy trackActivity from the registered tab to the recycled slot")
+                .isTrue();
+        verify(bean).callAccessPointMethod();
+    }
 }

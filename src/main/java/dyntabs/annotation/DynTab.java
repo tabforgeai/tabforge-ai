@@ -210,4 +210,22 @@ public @interface DynTab {
      * </ul>
      */
     String[] parameters() default {};
+
+    /**
+     * Whether opening this tab should record a {@code NAVIGATION} entry on the ambient activity timeline,
+     * so an AI assistant wired with {@code .withActivityContext(...)} knows the user just navigated here.
+     *
+     * <p>This is the declarative, navigation-flavoured counterpart to placing
+     * {@code @ActivityTracked(type = NAVIGATION)} on the tab's entry method: when {@code true}, the
+     * framework emits a {@link dyntabs.ai.activity.UserActivityEvent} of type
+     * {@link dyntabs.ai.activity.UserActivityEvent.Type#NAVIGATION} (tagged with the tab's
+     * {@link #uniqueIdentifier()} and {@link #title()}) as the tab is opened. Captured activity is read
+     * back by a {@link dyntabs.ai.activity.ActivityContext} to make the assistant context-aware.</p>
+     *
+     * <p>Default: {@code false} (opening the tab records nothing).</p>
+     *
+     * @see dyntabs.ai.activity.ActivityTracked
+     * @see dyntabs.ai.activity.ActivityRecorder
+     */
+    boolean trackActivity() default false;
 }

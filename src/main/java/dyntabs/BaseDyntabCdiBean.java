@@ -1,5 +1,6 @@
 package dyntabs;
 import java.io.Serializable;
+import java.util.List;
 import java.util.Map;
 
 import jakarta.annotation.PostConstruct;
@@ -12,6 +13,9 @@ import jakarta.inject.Inject;
 import org.primefaces.PrimeFaces;
 import org.primefaces.component.datatable.DataTable;
 
+import dyntabs.ai.activity.ActivityRecorder;
+import dyntabs.ai.activity.EntityRef;
+import dyntabs.ai.activity.UserActivityEvent;
 import dyntabs.interfaces.DyntabBeanInterface;
 import security.AccessCheck;
 
@@ -45,6 +49,15 @@ import org.slf4j.LoggerFactory;
 public class BaseDyntabCdiBean implements Serializable, DyntabBeanInterface {
 
    protected static final Logger log = LoggerFactory.getLogger(BaseDyntabCdiBean.class);
+
+   /**
+    * Front desk for the ambient activity timeline. Injected so that a tab declared with
+    * {@code @DynTab(trackActivity = true)} can have its opening recorded automatically in
+    * {@link #callAccessPointMethod()}. The recorder is an {@code @ApplicationScoped} facade, so this
+    * normal-scoped proxy is safe to hold in a passivation-capable tab bean.
+    */
+   @Inject
+   protected ActivityRecorder activityRecorder;
 
    @Override
    @PostConstruct
@@ -138,6 +151,7 @@ public class BaseDyntabCdiBean implements Serializable, DyntabBeanInterface {
          }
       } else { // react to dynTabSelected on this tab itself (for removed/added there is accessPointMethod/exitPointMethod)
          if ("dynTabSelected".equalsIgnoreCase(eventType)) {
+            recordTabSelectActivity();
             onThisTabSelected();
          }
       }
@@ -341,6 +355,7 @@ public class BaseDyntabCdiBean implements Serializable, DyntabBeanInterface {
          accessPointMethod(getParameters());
          setMainContentRendered(true);
          setErrPageRendered(false);
+         recordTabOpenActivity();
       } catch (Exception exc) {
          log.error("callAccessPointMethod() error: {}", exc.getMessage(), exc);
 
@@ -349,6 +364,80 @@ public class BaseDyntabCdiBean implements Serializable, DyntabBeanInterface {
          setErrMsg(exc.getMessage());
       }
       log.debug("callAccessPointMethod() end");
+   }
+
+   /**
+    * Transient guard that suppresses the one tab-selection event {@code DynTabManager.addTab()} fires
+    * immediately after opening a tab (which would otherwise duplicate the "open" entry we just wrote).
+    * Set by {@link #recordTabOpenActivity()} and consumed by {@link #recordTabSelectActivity()}.
+    */
+   private transient boolean justOpenedForActivity = false;
+
+   /**
+    * Records a NAVIGATION "open" entry on the ambient activity timeline when this tab opens, but only
+    * if the tab was declared with {@code @DynTab(trackActivity = true)}.
+    *
+    * <p>Called from {@link #callAccessPointMethod()} on the success path (after the tab's content has
+    * rendered), so only tabs that actually opened are recorded. On success it raises
+    * {@link #justOpenedForActivity} so the selection event that {@code addTab()} fires right afterwards
+    * is not double-recorded.</p>
+    */
+   private void recordTabOpenActivity() {
+      if (recordTabActivity("open")) {
+         justOpenedForActivity = true;
+      }
+   }
+
+   /**
+    * Records a NAVIGATION "select" entry when this tab is brought back to the front (a genuine focus
+    * change), unless the selection is the one that immediately follows opening the tab — that one is
+    * suppressed via {@link #justOpenedForActivity} so opening a tab yields a single "open" entry, not
+    * "open" + "select".
+    *
+    * <p>Called from {@link #observeDynTabEvent(DynTabCDIEvent)} when this very tab is selected. Placed
+    * in the dispatcher rather than the overridable {@link #onThisTabSelected()} hook, so a subclass
+    * that overrides the hook (and forgets {@code super}) cannot silently disable tracking.</p>
+    */
+   private void recordTabSelectActivity() {
+      if (justOpenedForActivity) {
+         justOpenedForActivity = false; // consume: this select belongs to the open we just recorded
+         return;
+      }
+      recordTabActivity("select");
+   }
+
+   /**
+    * Writes one NAVIGATION activity event for this tab with the given verb, honouring the
+    * {@code trackActivity} opt-in.
+    *
+    * <p>Shared by {@link #recordTabOpenActivity()} and {@link #recordTabSelectActivity()}. The event —
+    * tagged with the tab's {@code uniqueIdentifier} and {@code title} — is written through
+    * {@link #activityRecorder} into the {@link dyntabs.ai.activity.ActivityStore}, from where a
+    * {@link dyntabs.ai.activity.ActivityContext} later reads it to make an AI assistant aware of where
+    * the user is. Any failure is swallowed: activity tracking must never break tab navigation.</p>
+    *
+    * @param verb the navigation verb to record (e.g. {@code "open"}, {@code "select"})
+    * @return {@code true} if an event was actually recorded; {@code false} if the tab did not opt in or
+    *         could not be identified
+    */
+   private boolean recordTabActivity(String verb) {
+      try {
+         DynTab dynTab = getDynTab();
+         if (dynTab == null || !dynTab.isTrackActivity() || activityRecorder == null) {
+            return false;
+         }
+         String uniqueId = dynTab.getUniqueIdentifier();
+         if (uniqueId == null) {
+            return false;
+         }
+         String title = dynTab.getTitle();
+         EntityRef tabRef = EntityRef.of("tab", uniqueId, "label", title != null ? title : uniqueId);
+         activityRecorder.record(UserActivityEvent.Type.NAVIGATION, verb, List.of(tabRef), null);
+         return true;
+      } catch (RuntimeException e) {
+         log.warn("recordTabActivity({}) failed: {}", verb, e.getMessage());
+         return false;
+      }
    }
 
    @Override

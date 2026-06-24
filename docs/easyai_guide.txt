@@ -970,6 +970,161 @@
 
 
 ================================================================================
+  USE CASE 11: Ambient Activity Memory (The Assistant Knows What You Just Did)
+================================================================================
+
+  Every use case above answers the exact question the user types. But people
+  rarely spell out the context: they open an order on screen and then ask
+  "cancel this one", or switch to a tab and ask "what am I looking at?". A
+  colleague glancing at your screen would simply know. Ambient Activity Memory
+  gives your assistant that same over-the-shoulder awareness.
+
+  --- The simple example ---
+
+    The user opens order ORD-002 in the UI, then types:   "cancel this"
+    The assistant cancels ORD-002 - even though the message never named it.
+
+  It works because the act of opening the order was recorded onto a short
+  activity timeline, and that timeline was handed to the model as context just
+  before it answered. The model read "recently viewed order ORD-002" and
+  resolved "this" on its own.
+
+
+  --- How it works (in one picture) ---
+
+    user does something in the UI
+        -> recorded as a UserActivityEvent (what verb, which entity, which tab)
+        -> kept in a small, per-session, in-memory timeline (ActivityStore)
+
+    user asks the assistant something
+        -> just before the model runs, the recent slice of that timeline is
+           rendered into the SYSTEM message (ActivityContext.render())
+        -> the model sees "recently viewed order ORD-002" and resolves "this"
+
+  This is the mirror image of the live event stream (AI -> UI). Here the arrow
+  points the other way, UI -> AI: you capture events WHEN they happen, and read
+  a compact, recent slice at the MOMENT the AI is called. The model never sees
+  raw clicks - only a short, human-readable briefing of the last few actions.
+
+  Privacy by design: the timeline lives in memory, is scoped per session,
+  bounded to the most recent N events, and evaporates when the session ends.
+  Only labels and ids are stored - never raw clicks or screen contents.
+
+
+  --- What you do: 2 steps ---
+
+  STEP 1: Capture activity (opt-in - nothing is recorded unless you ask).
+
+  There are two sources of activity; use either or both.
+
+  (a) Navigation - "which tab is the user on".
+      Add trackActivity = true to your @DynTab. Opening or re-selecting the tab
+      is then recorded automatically. No other code.
+
+        @DynTab(name = "OrdersDynTab", uniqueIdentifier = "Orders",
+                title = "Orders", includePage = "/WEB-INF/include/orders.xhtml",
+                trackActivity = true)              // <-- opt in
+        public class OrdersBean extends BaseDyntabCdiBean { ... }
+
+  (b) Business actions - "which entity the user acted on".
+      Annotate a method with @ActivityTracked. When it is called, an event is
+      recorded, tagging the entity whose id is in the named parameter.
+
+        @ApplicationScoped
+        public class OrderActivityService {
+
+            @ActivityTracked(type = Type.BUSINESS_ACTION, verb = "view",
+                             entityType = "order", entityIdParams = "orderId")
+            public String viewOrder(String orderId) {
+                return loadOrder(orderId);         // your normal logic
+            }
+        }
+
+  Both write through the same ActivityRecorder facade, which stamps each event
+  with the current session and tab. You can also record by hand for things an
+  annotation can't express:
+
+        @Inject ActivityRecorder recorder;
+        recorder.record(Type.NOTE, "note", null, "free-text note the user typed");
+
+
+  STEP 2: Make the assistant aware - .withActivityContext(...).
+
+  Build an ActivityContext describing WHICH slice of the timeline to inject, and
+  pass it to any assistant or conversation. It is re-read fresh on every call.
+
+        @Inject ActivityStore activityStore;       // the default in-memory store
+
+        ActivityContext ctx = ActivityContext.of(activityStore)
+            .forSession(sessionId)        // scope to this user's session
+            .forTab(tabId)                // (optional) scope to one tab
+            .window(Duration.ofMinutes(30))  // (optional) only the last 30 min
+            .limit(20)                    // (optional) at most N events (default 20)
+            .build();
+
+        OrdersAssistant assistant = EasyAI.assistant(OrdersAssistant.class)
+            .withTools(orderService)      // so it can ACT on "this"
+            .withActivityContext(ctx)     // so it KNOWS what "this" is
+            .build();
+
+        assistant.ask("cancel this");     // resolves to the order just viewed
+
+  The same builder call works on a plain conversation:
+
+        Conversation chat = EasyAI.chat()
+            .withActivityContext(ctx)
+            .build();
+
+
+  --- Two ways to scope it (both shown in the demo) ---
+
+  Per-tab deixis - act on "this":
+
+        ActivityContext.of(store).forSession(s).forTab(t).build()
+        + .withTools(...)        ->  "cancel this order"
+
+      The context is narrowed to one tab, so "this" is unambiguous.
+
+  Session-wide orientation - know "where am I":
+
+        ActivityContext.of(store).forSession(s).build()   (no forTab)
+        ->  "what tab am I on?", "what have I been looking at?"
+
+      The context spans every tracked tab, so the assistant can report the
+      user's navigation across the whole application.
+
+
+  --- How the briefing looks to the model ---
+
+  The default renderer turns the timeline into a short, plain block, e.g.:
+
+        Recent user activity in this tab (oldest first):
+        - 14:02 open Orders
+        - 14:03 view order ORD-002
+
+  That text is appended to your system message. Supply your own format with
+  .renderer(...) on the builder if you want a different style.
+
+
+  --- Important notes ---
+
+  1. Opt-in only. Without @DynTab(trackActivity=true) or @ActivityTracked,
+     nothing is captured. The feature is silent until you switch it on.
+
+  2. Scope must line up. The ActivityContext reads with forSession/forTab; the
+     recorder stamps each event with the current session and tab. In TabForge
+     the tab id is getDynTabId() - pass exactly that to forTab(...).
+
+  3. In-memory and ephemeral by default. Activity is held in a per-session ring
+     buffer (ActivityStore SPI, InMemoryActivityStore default, ~200 events per
+     session) and is gone when the app stops. Provide your own ActivityStore
+     bean to back it with a database if you need durability.
+
+  4. Recording never breaks the user's action. A failure to record is swallowed
+     and logged - tab navigation and your service calls are unaffected.
+
+
+================================================================================
   CONFIGURATION REFERENCE
 ================================================================================
 
@@ -1033,6 +1188,19 @@
       minScore   - minimum relevance threshold (default 0.5)
     Alternative: use .withRAG(DocumentSource...) for byte[] content
 
+  @ActivityTracked                                       (see USE CASE 11)
+    Where:    on a public method (in your service class)
+    Purpose:  records a user-activity event when the method is called, so an
+              assistant wired with .withActivityContext(...) can later resolve
+              "this"/"that" from what the user just did
+    Attributes:
+      type           - event category (default BUSINESS_ACTION)
+      verb           - the act, e.g. "view"/"approve" (default: method name)
+      entityType     - the kind of entity touched, e.g. "order"
+      entityIdParams - names of the parameter(s) carrying the entity id
+      includeText    - capture a String parameter as free text (default false)
+    Companion: @DynTab(trackActivity = true) records tab open/select navigation
+
 
 ================================================================================
   PROJECT STRUCTURE
@@ -1075,6 +1243,18 @@
     SchemaDescriber.java        Reflection: target class -> JSON skeleton for the model
     ExtractionEngine.java       Prompt -> model -> JSON -> typed object (+ retry, validate)
     ExtractionException.java    Thrown when extraction or validation fails
+
+  dyntabs.ai.activity                                    (see USE CASE 11)
+    UserActivityEvent.java      Immutable timeline entry (verb, entities, tab)
+    EntityRef.java              Pointer to a business entity (type + id + label)
+    @ActivityTracked            Records an event when an annotated method runs
+    ActivityTrackedInterceptor  Applies @ActivityTracked (records on success)
+    ActivityRecorder.java       Facade: stamps session/tab, writes to the store
+    ActivityStore.java          SPI for the activity timeline (query + record)
+    ActivityQuery.java          Filter: session, tab, time window, types, limit
+    InMemoryActivityStore.java  Default store: per-session bounded ring-buffer
+    ActivityContext.java        Lazy "recent slice to inject" (.withActivityContext)
+    ActivityRenderer.java       Turns events into the prompt briefing text
 
   dyntabs.ai.cdi
     EasyAIExtension.java        CDI Extension for @Inject support

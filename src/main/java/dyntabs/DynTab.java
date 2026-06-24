@@ -250,6 +250,35 @@ public class DynTab implements Serializable {
       return this.isCloseable;
    }
 
+   private boolean trackActivity = false;
+
+   /**
+    * Sets whether opening this tab should be recorded on the ambient activity timeline.
+    *
+    * <p>Copied here from the {@code @DynTab(trackActivity = ...)} annotation by
+    * {@link DynTabRegistry} when the tab is registered, so the runtime tab carries the flag
+    * without re-reading annotations. Read at open time by
+    * {@link BaseDyntabCdiBean#callAccessPointMethod()} to decide whether to emit a NAVIGATION event.</p>
+    *
+    * @param trackActivity {@code true} to record a NAVIGATION activity when this tab is opened
+    */
+   public void setTrackActivity(boolean trackActivity) {
+      this.trackActivity = trackActivity;
+   }
+
+   /**
+    * Whether opening this tab should record a NAVIGATION entry on the ambient activity timeline.
+    *
+    * <p>Consulted by {@link BaseDyntabCdiBean#callAccessPointMethod()} right after a tab opens;
+    * when {@code true}, an {@link dyntabs.ai.activity.ActivityRecorder} writes a
+    * {@link dyntabs.ai.activity.UserActivityEvent} so an AI assistant knows the user navigated here.</p>
+    *
+    * @return {@code true} if tab-open should be tracked; defaults to {@code false}
+    */
+   public boolean isTrackActivity() {
+      return this.trackActivity;
+   }
+
    /**
     * Looks up the DynTab bean for the given tab name from the JSF expression context.
     *

@@ -1,12 +1,12 @@
 # TabForge AI — LLM Context File
 # Use this file to understand the TabForge AI library API when helping developers write code.
 # GitHub: https://github.com/tabforgeai/tabforge-ai
-# Maven: io.github.tabforgeai:tabforge-ai:1.1.0
+# Maven: io.github.tabforgeai:tabforge-ai:2.2.0
 
 ## What is TabForge AI?
 
 A Jakarta EE library with two independent modules:
-- **EasyAI** — add AI assistants, chatbots, RAG, and autonomous agents to Jakarta EE apps
+- **EasyAI** — add AI assistants, chatbots, RAG, autonomous agents, persistent vector store (Milvus), structured extraction, live event streaming, and ambient activity memory to Jakarta EE apps
 - **DynTabs** — multi-tab PrimeFaces UI with a custom CDI scope per tab (@TabScoped)
 
 Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in plain Java (no container needed).
@@ -20,7 +20,7 @@ Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>1.1.0</version>
+    <version>2.2.0</version>
 </dependency>
 ```
 
@@ -199,6 +199,90 @@ When a tool throws an exception, result contains: `TOOL_ERROR | tool=X | error=Y
 - Single Q&A with tool calls → `EasyAI.assistant()`
 - Multi-step task, conditional branching, autonomous execution → `EasyAI.agent()`
 
+### 6. Persistent RAG with Milvus — EasyAI.indexer() + .withMilvus()
+
+Index documents ONCE into a persistent vector database; assistants query it forever (survives restarts, shared across sessions/server nodes). Use case 4 RAG is in-memory and ephemeral; Milvus is durable and scales to thousands of docs.
+
+```java
+// WRITE side — index once (batch job, or on upload):
+int n = EasyAI.indexer()
+    .toMilvus("localhost", 19530, "company_kb")
+    .index("file:/data/policy.pdf", DocumentSource.of("faq.pdf", bytes));
+
+// READ side — any assistant queries the same store, instantly:
+KbBot bot = EasyAI.assistant(KbBot.class)
+    .withMilvus("localhost", 19530, "company_kb")
+    .build();
+bot.ask("How many vacation days do employees get?");
+```
+
+`.withMilvus(...)` takes precedence over `.withRAG(...)` / `@EasyRAG`. Connection can come from `easyai.milvus.*` properties via no-arg `.toMilvus()` / `.withMilvus()`. The dimension (default 384) must match the embedding model. Tuning: `.withMilvus(MilvusConfig.of(...), maxResults, minScore)`.
+
+### 7. Structured Extraction — EasyAI.extract()
+
+Turn unstructured text or a document into a TYPED Java record/POJO — the bridge from AI text into your normal typed-Java world.
+
+```java
+record Invoice(String vendor, String invoiceNumber, LocalDate date, BigDecimal total) {}
+
+// From free text:
+Invoice inv = EasyAI.extract(Invoice.class).from(emailBody);
+
+// From a document's bytes (parsed by Tika, then extracted, in one call):
+Invoice inv = EasyAI.extract(Invoice.class)
+    .from(DocumentSource.of("invoice.pdf", pdfBytes));
+```
+
+Supports records and POJOs, nested objects, lists, enums, and java.time types. Options:
+- `.withRetries(n)` — retry on malformed model JSON (default 2)
+- `.validate()` — run Jakarta Bean Validation; throws `ExtractionException` on a violation
+- per-call config overrides (`.withModel`, `.withApiKey`, ...); extraction defaults to temperature 0.0
+
+### 8. Live Event Stream — observe the AI as it works
+
+Get a live callback for each step the AI takes (tool call, result, agent start/finish), e.g. to drive a real-time UI activity panel. The library stays transport-agnostic — you decide where events go (SSE, WebSocket, log).
+
+```java
+EasyAgent agent = EasyAI.agent()
+    .withServices(orderService, paymentService)
+    .withEventListener(event -> activityBridge.onEvent(event))   // EasyAIEvent per step
+    .build();
+```
+
+Available on `chat()`, `assistant()`, and `agent()` via `.withEventListener(...)`. The agent additionally offers `.withStepListener(step -> ...)` for a typed `AgentStep` (stepNumber/toolName/arguments/result).
+
+### 9. Ambient Activity Memory — .withActivityContext()
+
+The assistant resolves "this"/"that" from what the user JUST DID in the UI, with no typed context. Mirror image of the live event stream: UI → AI instead of AI → UI.
+
+```java
+// 1. Capture (opt-in). Navigation:
+@DynTab(name = "OrdersDynTab", uniqueIdentifier = "Orders", trackActivity = true)
+public class OrdersBean extends BaseDyntabCdiBean { ... }   // records tab open/select
+
+//    ...and/or business actions:
+@ActivityTracked(type = Type.BUSINESS_ACTION, verb = "view",
+                 entityType = "order", entityIdParams = "orderId")
+public String viewOrder(String orderId) { ... }            // records "viewed order ORD-002"
+
+// 2. Inject the recent activity into the assistant (re-read fresh on every call):
+@Inject ActivityStore activityStore;
+
+ActivityContext ctx = ActivityContext.of(activityStore)
+    .forSession(sessionId).forTab(tabId).build();    // omit forTab() for app-wide scope
+
+OrdersAssistant bot = EasyAI.assistant(OrdersAssistant.class)
+    .withTools(orderService)         // so it can ACT on "this"
+    .withActivityContext(ctx)        // so it KNOWS what "this" is
+    .build();
+
+bot.ask("cancel this");              // resolves to the order just viewed
+```
+
+- `forSession(s).forTab(t)` → per-tab deixis ("cancel this order"). Omit `forTab` → session-wide orientation ("what tab am I on?").
+- In-memory, per-session, ephemeral by default (`ActivityStore` SPI, `InMemoryActivityStore` default). Also `.window(Duration)`, `.limit(n)`, `.renderer(...)`.
+- Capture is opt-in: nothing is recorded without `@DynTab(trackActivity=true)` or `@ActivityTracked`.
+
 ---
 
 ## JAKARTA EE / CDI INTEGRATION
@@ -271,6 +355,7 @@ public class AgentBean {
 | `@EasyAIAssistant` | interface | Marks as AI assistant; `systemMessage` sets personality |
 | `@EasyTool` | method | Optional description to help AI pick the right method |
 | `@EasyRAG` | interface | Loads documents for RAG; `source`, `maxResults`, `minScore` |
+| `@ActivityTracked` | method | Records a user-activity event when called; `type`, `verb`, `entityType`, `entityIdParams`, `includeText`. Read back via `.withActivityContext(...)` |
 
 ---
 
@@ -284,6 +369,10 @@ public class AgentBean {
 | `easyai.base-url` | Custom endpoint | (provider default) |
 | `easyai.temperature` | 0.0–1.0 | (provider default) |
 | `easyai.max-tokens` | Max response length | (provider default) |
+| `easyai.milvus.host` | Milvus host (use case 6) | `localhost` |
+| `easyai.milvus.port` | Milvus port | `19530` |
+| `easyai.milvus.collection` | Collection name | (required) |
+| `easyai.milvus.dimension` | Embedding dimension | `384` |
 
 Programmatic override:
 ```java
@@ -357,4 +446,5 @@ public class OrdersBean extends BaseDyntabCdiBean {
 - `sendMessageToAllAppModules(payload)` / `onApplicationMessage()` — inter-tab messaging
 - `closeAndReturnValueToCaller(value)` — child tab returns value to parent
 - `@DynTab(securedResource=true, allowedRoles={"ADMIN"})` — declarative security
+- `@DynTab(trackActivity=true)` — records tab open/select onto the ambient activity timeline (feeds EasyAI Ambient Activity Memory, use case 9)
 - Open tabs programmatically with parameters at runtime

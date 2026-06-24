@@ -12,6 +12,7 @@ import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.service.AiServices;
 import dev.langchain4j.service.tool.ToolExecutor;
+import dyntabs.ai.activity.ActivityContext;
 import dyntabs.ai.annotation.EasyAIAssistant;
 import dyntabs.ai.annotation.EasyRAG;
 import dyntabs.ai.assistant.ToolIntrospector;
@@ -125,6 +126,7 @@ public class AssistantBuilder<T> {
     private String systemMessage;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
     private ChatModel externalModel;
+    private ActivityContext activityContext;
 
     // Programmatic RAG config (overrides @EasyRAG annotation if set)
     private String[] ragSources;
@@ -384,6 +386,37 @@ public class AssistantBuilder<T> {
         return this;
     }
 
+    /**
+     * Makes this assistant <em>ambient-activity aware</em>: before each call to any of the assistant's
+     * methods, the given context is re-rendered and folded into the system message, so the model
+     * already knows what the user has recently been doing in the UI (and can resolve "this"/"that"
+     * without being told).
+     *
+     * <p><b>Familiar analogy:</b> giving your assistant a glance at your desk before every question —
+     * it sees the order you just opened, so "email the customer about it" needs no further explanation.</p>
+     *
+     * <pre>{@code
+     * SupportBot bot = EasyAI.assistant(SupportBot.class)
+     *     .withTools(orderService)
+     *     .withActivityContext(ActivityContext.of(activityStore)
+     *         .forSession(sessionId).forTab(tabId).build())
+     *     .build();
+     *
+     * bot.ask("Cancel this order");   // "this" resolved from recent activity
+     * }</pre>
+     *
+     * <p>The context is combined with any {@link #withSystemMessage(String)} value by
+     * {@link SystemMessageComposer}; passing {@code null} simply leaves the feature off.</p>
+     *
+     * @param activityContext the ambient-activity descriptor to inject, or {@code null} to disable
+     * @return this builder
+     * @see dyntabs.ai.activity.ActivityContext
+     */
+    public AssistantBuilder<T> withActivityContext(ActivityContext activityContext) {
+        this.activityContext = activityContext;
+        return this;
+    }
+
     public T build() {
         ChatModel model = externalModel != null
                 ? externalModel
@@ -398,9 +431,13 @@ public class AssistantBuilder<T> {
             serviceBuilder.chatMemory(memory);
         }
 
-        // System message
-        if (systemMessage != null && !systemMessage.isBlank()) {
-            serviceBuilder.systemMessageProvider(chatMemoryId -> systemMessage);
+        // System message. Install a provider when there is either a static message OR an ambient
+        // activity context; the lambda runs on every assistant-method call, so the activity briefing
+        // it folds in is re-rendered fresh each time (see SystemMessageComposer).
+        boolean hasSystemMessage = systemMessage != null && !systemMessage.isBlank();
+        if (hasSystemMessage || activityContext != null) {
+            serviceBuilder.systemMessageProvider(
+                    chatMemoryId -> SystemMessageComposer.compose(systemMessage, activityContext));
         }
 
         // Auto-tool registration (without @Tool)

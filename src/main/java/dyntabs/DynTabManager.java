@@ -590,6 +590,10 @@ public class DynTabManager implements Serializable {
             tab.setActive(true);
             tab.setIncludePage(tabToAdd.getIncludePage());
             tab.setUniqueIdentifier(tabToAdd.getUniqueIdentifier());
+            // Carry over the opt-in flags from the registered tab to the recycled slot. Without this,
+            // navigation activity (open/select) is never recorded for menu-opened tabs, because the
+            // slot keeps its default trackActivity=false even though @DynTab(trackActivity=true) was set.
+            tab.setTrackActivity(tabToAdd.isTrackActivity());
 
             log.debug("tab id = {}", tab.getId());
             tab.setParameters(tabToAdd.getParameters());

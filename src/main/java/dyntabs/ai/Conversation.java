@@ -4,6 +4,7 @@ import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.service.AiServices;
+import dyntabs.ai.activity.ActivityContext;
 import dyntabs.ai.event.EventEmitter;
 
 /**
@@ -57,7 +58,8 @@ public class Conversation {
         String chat(String message);
     }
 
-    Conversation(ChatModel model, String systemMessage, int memorySize, EventEmitter emitter) {
+    Conversation(ChatModel model, String systemMessage, int memorySize, EventEmitter emitter,
+                 ActivityContext activityContext) {
         this.emitter = emitter;
 
         AiServices<ChatBot> serviceBuilder = AiServices.builder(ChatBot.class)
@@ -68,8 +70,13 @@ public class Conversation {
             serviceBuilder.chatMemory(memory);
         }
 
-        if (systemMessage != null && !systemMessage.isBlank()) {
-            serviceBuilder.systemMessageProvider(chatMemoryId -> systemMessage);
+        // Install a system-message provider when there is either a static message OR an ambient
+        // activity context. The lambda is evaluated by LangChain4J on every send(...), so the
+        // activity briefing it folds in is re-rendered fresh for each turn (see SystemMessageComposer).
+        boolean hasSystemMessage = systemMessage != null && !systemMessage.isBlank();
+        if (hasSystemMessage || activityContext != null) {
+            serviceBuilder.systemMessageProvider(
+                    chatMemoryId -> SystemMessageComposer.compose(systemMessage, activityContext));
         }
 
         this.chatBot = serviceBuilder.build();
