@@ -29,22 +29,23 @@ import java.lang.annotation.Target;
  *     String ask(String question);
  * }
  *
- * // AI will call methods on orderService and userService automatically
+ * // AI will call the @EasyTool methods on orderService and userService automatically
  * SupportBot bot = EasyAI.assistant(SupportBot.class)
- *     .withTools(orderService, userService)
+ *     .withTools(orderService, userService)   // opt-in: only @EasyTool methods exposed
  *     .build();
  * }</pre>
  *
  * <h3>With Jakarta EJB Beans as Tools</h3>
  * <p>EJB beans ({@code @Stateless}, {@code @Stateful}, {@code @Singleton}) injected via
- * {@code @Inject} work as tools out of the box. Transactions, security, and interceptors
- * work normally because calls go through the EJB container proxy.</p>
+ * {@code @Inject} work as tools out of the box. Mark the callable methods with
+ * {@link EasyTool @EasyTool}. Transactions, security, and interceptors work normally
+ * because calls go through the EJB container proxy.</p>
  * <pre>{@code
  * @Inject OrderService orderService;   // @Stateless EJB proxy
  * @Inject CacheService cacheService;   // @Singleton EJB proxy
  *
  * SupportBot bot = EasyAI.assistant(SupportBot.class)
- *     .withTools(orderService, cacheService)   // just pass injected proxies
+ *     .withTools(orderService, cacheService)   // only their @EasyTool methods are callable
  *     .build();
  * }</pre>
  *
@@ -103,8 +104,10 @@ public @interface EasyAIAssistant {
      * CDI/EJB bean classes to auto-wire as tools when this assistant is injected via {@code @Inject}.
      *
      * <p>The CDI extension resolves live instances of these classes from the container
-     * and registers their public methods as AI tools — equivalent to calling
-     * {@code .withTools(orderService, inventoryService)} programmatically.</p>
+     * and registers their {@link EasyTool @EasyTool}-annotated methods as AI tools —
+     * equivalent to calling {@code .withTools(orderService, inventoryService)}
+     * programmatically. Opt-in applies here too: only {@code @EasyTool} methods on these
+     * beans become callable.</p>
      *
      * <p>Supported bean types:</p>
      * <ul>

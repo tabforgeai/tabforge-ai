@@ -43,11 +43,13 @@ import dyntabs.ai.rag.RagEngine;
  *
  * <h3>Use Case 2: AI Assistant with Tools (AI Calls Your Java Code)</h3>
  * <p>This is the most powerful feature. Pass your existing service objects to
- * {@link #withTools(Object...)}, and the AI will call their methods when needed.
- * <b>No annotations are required on your service classes.</b></p>
+ * {@link #withTools(Object...)}, and the AI will call their {@link dyntabs.ai.annotation.EasyTool
+ * @EasyTool}-annotated methods when needed. <b>Tools are opt-in:</b> only annotated methods are
+ * exposed to the model; everything else stays uncallable.</p>
  * <pre>{@code
- * // Your existing service - plain Java, no AI annotations
+ * // Your existing service - annotate the methods the AI may call
  * public class WeatherService {
+ *     @EasyTool("Returns the current weather for a city")
  *     public String getWeather(String city) {
  *         return weatherApi.fetch(city).toString();
  *     }
@@ -80,13 +82,14 @@ import dyntabs.ai.rag.RagEngine;
  * <h3>Use Case 4: Jakarta EJB Beans as Tools</h3>
  * <p>EJB beans ({@code @Stateless}, {@code @Stateful}, {@code @Singleton}) injected via
  * {@code @Inject} work as tools out of the box. EasyAI automatically detects the EJB proxy
- * and discovers business methods from the actual bean class. Method calls go through the
- * container proxy, so transactions, security, and interceptors work normally.</p>
+ * and reads the {@code @EasyTool} methods from the actual bean class. Method calls go through
+ * the container proxy, so transactions, security, and interceptors work normally.</p>
  * <pre>{@code
  * @Stateless
  * public class OrderService {
  *     @PersistenceContext private EntityManager em;
  *
+ *     @EasyTool("Finds an order by its ID")
  *     public String findOrder(String orderId) {
  *         return em.find(Order.class, orderId).toString();
  *     }
@@ -96,7 +99,7 @@ import dyntabs.ai.rag.RagEngine;
  * @Inject OrderService orderService;   // EJB proxy from the container
  *
  * SupportBot bot = EasyAI.assistant(SupportBot.class)
- *     .withTools(orderService)          // just pass the injected proxy
+ *     .withTools(orderService)          // only its @EasyTool methods are callable
  *     .build();
  *
  * bot.ask("Where is order #123?");
@@ -122,6 +125,9 @@ public class AssistantBuilder<T> {
 
     private final Class<T> assistantInterface;
     private final List<Object> toolObjects = new ArrayList<>();
+    // Escape-hatch tool objects: every public method is exposed, annotated or not.
+    // Kept separate from toolObjects so opt-in and expose-all never cross-contaminate.
+    private final List<Object> allPublicToolObjects = new ArrayList<>();
     private int memorySize = 20;
     private String systemMessage;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
@@ -148,7 +154,13 @@ public class AssistantBuilder<T> {
     }
 
     /**
-     * Adds tool objects whose public methods the AI can call.
+     * Adds tool objects whose {@link dyntabs.ai.annotation.EasyTool @EasyTool}-annotated
+     * methods the AI can call.
+     *
+     * <p><b>Opt-in (since 3.0.0):</b> only methods you mark with {@code @EasyTool} become
+     * tools. Every other method — including state-mutating ones like {@code cancelOrder} or
+     * {@code deleteUser} — stays invisible to the model. Adding a method to a service is safe
+     * by default; it does nothing until you annotate it.</p>
      *
      * <p>Accepts plain POJOs and Jakarta EJB proxies ({@code @Stateless},
      * {@code @Stateful}, {@code @Singleton}) obtained via {@code @Inject}.
@@ -158,10 +170,33 @@ public class AssistantBuilder<T> {
      *
      * @param tools one or more service objects (POJOs or injected EJB proxies)
      * @return this builder
+     * @see #withAllPublicMethodsAsTools(Object...)
      */
     public AssistantBuilder<T> withTools(Object... tools) {
         for (Object tool : tools) {
             this.toolObjects.add(tool);
+        }
+        return this;
+    }
+
+    /**
+     * Adds tool objects and exposes <b>every public method</b> on them to the AI — annotated
+     * or not.
+     *
+     * <p><b>Unsafe escape hatch.</b> This restores the pre-3.0.0 "expose everything" behavior.
+     * Because a tool channel is reachable by the model (whose input is not fully trusted), this
+     * lets a prompt-injected model invoke any public method on the beans you pass — a classic
+     * confused-deputy exposure. Reserve it for throwaway prototypes where nothing is sensitive;
+     * for anything real, prefer {@link #withTools(Object...)} with
+     * {@link dyntabs.ai.annotation.EasyTool @EasyTool} on exactly the methods you intend.</p>
+     *
+     * @param tools one or more service objects whose entire public surface becomes callable
+     * @return this builder
+     * @see #withTools(Object...)
+     */
+    public AssistantBuilder<T> withAllPublicMethodsAsTools(Object... tools) {
+        for (Object tool : tools) {
+            this.allPublicToolObjects.add(tool);
         }
         return this;
     }
@@ -440,9 +475,16 @@ public class AssistantBuilder<T> {
                     chatMemoryId -> SystemMessageComposer.compose(systemMessage, activityContext));
         }
 
-        // Auto-tool registration (without @Tool)
-        if (!toolObjects.isEmpty()) {
-            List<ToolMethod> toolMethods = ToolIntrospector.introspect(toolObjects.toArray());
+        // Tool registration. Opt-in objects expose only @EasyTool methods; escape-hatch
+        // objects expose their whole public surface. Merge both into a single tool map.
+        if (!toolObjects.isEmpty() || !allPublicToolObjects.isEmpty()) {
+            List<ToolMethod> toolMethods = new ArrayList<>();
+            if (!toolObjects.isEmpty()) {
+                toolMethods.addAll(ToolIntrospector.introspect(toolObjects.toArray()));
+            }
+            if (!allPublicToolObjects.isEmpty()) {
+                toolMethods.addAll(ToolIntrospector.introspectAllPublic(allPublicToolObjects.toArray()));
+            }
             Map<ToolSpecification, ToolExecutor> toolMap = new HashMap<>();
 
             for (ToolMethod tm : toolMethods) {

@@ -138,27 +138,48 @@
   This is the most powerful feature. You give the AI access to your existing
   Java services, and it decides when to call them based on the user's question.
 
-  YOUR SERVICE CLASSES DON'T NEED ANY AI ANNOTATIONS. They are plain Java.
+  TOOLS ARE OPT-IN (since 3.0.0). Only methods you mark with @EasyTool are
+  visible to the model. Everything else on the same service stays invisible and
+  uncallable.
 
-  --- Step 1: Your Existing Service (plain POJO/EJB) ---
+  WHY OPT-IN? A tool channel is reachable by the model, whose input is not fully
+  trusted (think prompt injection). If every public method were exposed, a
+  manipulated model could invoke anything on the beans you handed it — including
+  cancelOrder / processPayment / deleteUser — acting with your app's authority
+  but off your script (the "confused deputy" problem). Opt-in means adding a
+  method is safe by default: it does nothing until you deliberately annotate it.
+  Think of it as a menu — the kitchen can cook many things, but guests may only
+  order what's printed on the menu. @EasyTool is what puts a method on the menu.
+
+  --- Step 1: Your Existing Service — annotate the callable methods ---
 
     public class OrderService {
 
+        @EasyTool("Finds an order by its ID and returns its current status")
         public String findOrder(String orderId) {
             // your existing database logic
             return "Order " + orderId + ": shipped, arrives tomorrow";
         }
 
+        @EasyTool("Cancels an active order. Only works for unshipped orders.")
         public String cancelOrder(String orderId) {
             // your existing logic
             return "Order " + orderId + " has been cancelled";
         }
 
+        @EasyTool  // bare @EasyTool is fine — the method name becomes the description
         public List<String> getOrdersByCustomer(String email) {
             // your existing logic
             return List.of("ORD-001", "ORD-002", "ORD-003");
         }
+
+        // NOT annotated -> the model can never see or call this, even though it is public.
+        public void purgeAllOrders() { ... }
     }
+
+  The @EasyTool description is optional (a bare @EasyTool exposes the method with
+  its name as the description), but a good description helps the AI decide WHEN
+  to call the method — add one whenever the method name alone is ambiguous.
 
   --- Step 2: Define the Assistant Interface ---
 
@@ -193,21 +214,20 @@
     // AI calls orderService.getOrdersByCustomer("john@example.com")
 
 
-  --- Optional: Add @EasyTool for Better Descriptions ---
+  --- Escape hatch: expose every public method (prototypes only) ---
 
-  If the AI is picking the wrong method, add @EasyTool to help it:
+  If you truly want the old "expose everything" behavior — e.g. a throwaway
+  prototype where nothing is sensitive — use withAllPublicMethodsAsTools()
+  instead of withTools(). Its deliberately verbose name is meant to make the
+  risk obvious at the call site:
 
-    public class OrderService {
+    SupportBot bot = EasyAI.assistant(SupportBot.class)
+        .withAllPublicMethodsAsTools(prototypeService)   // ALL public methods callable
+        .build();
 
-        @EasyTool("Finds an order by its ID and returns its current status")
-        public String findOrder(String orderId) { ... }
-
-        @EasyTool("Cancels an active order. Only works for unshipped orders.")
-        public String cancelOrder(String orderId) { ... }
-    }
-
-  Note: @EasyTool is optional. Without it, the AI uses the method name
-  as the description. It works fine in most cases.
+  For anything real, prefer withTools() + @EasyTool on exactly the methods you
+  intend. (The agent builder has the same pair: withServices() is opt-in,
+  withAllPublicMethodsAsServices() is the escape hatch.)
 
 
 ================================================================================
@@ -397,9 +417,12 @@
 ================================================================================
 
   EasyAI fully supports Jakarta EJB beans (@Stateless, @Stateful, @Singleton)
-  as tool objects. If you inject an EJB via @Inject and pass it to withTools(),
-  everything works automatically - EasyAI detects the EJB proxy and discovers
-  the business methods from the actual bean class.
+  as tool objects. Inject an EJB via @Inject, annotate the callable methods with
+  @EasyTool, and pass the proxy to withTools() — EasyAI detects the EJB proxy and
+  reads the annotated methods from the actual bean class.
+
+  Opt-in applies to EJBs exactly as it does to POJOs: only @EasyTool methods are
+  exposed, so a public but destructive EJB method stays uncallable by the model.
 
   The method calls still go through the EJB proxy, so container services
   (transactions, security, interceptors) work exactly as they would normally.
@@ -412,11 +435,13 @@
         @PersistenceContext
         private EntityManager em;
 
+        @EasyTool("Finds an order by its ID")
         public String findOrder(String orderId) {
             Order order = em.find(Order.class, orderId);
             return order != null ? order.toString() : "Order not found";
         }
 
+        @EasyTool("Cancels an active order")
         public String cancelOrder(String orderId) {
             // runs inside a JTA transaction automatically
             Order order = em.find(Order.class, orderId);
@@ -447,6 +472,7 @@
     public class CacheService {
         private final Map<String, String> cache = new ConcurrentHashMap<>();
 
+        @EasyTool("Reads a cached value by key")
         public String getCachedValue(String key) {
             return cache.getOrDefault(key, "not found");
         }
@@ -455,6 +481,7 @@
     @Stateless
     public class ReportService {
 
+        @EasyTool("Generates a report of the given type")
         public String generateReport(String reportType) {
             // heavy transactional work...
             return "Report: ...";
@@ -476,11 +503,13 @@
 
         private final List<String> items = new ArrayList<>();
 
+        @EasyTool("Adds an item to the shopping cart")
         public String addItem(String itemName) {
             items.add(itemName);
             return "Added " + itemName + ". Cart has " + items.size() + " items.";
         }
 
+        @EasyTool("Returns the current cart contents")
         public String getCartContents() {
             return "Cart: " + String.join(", ", items);
         }
@@ -498,11 +527,11 @@
   --- Key Points ---
 
     - All three EJB types are supported: @Stateless, @Stateful, @Singleton
-    - Just inject via @Inject and pass to withTools() - nothing else needed
+    - Inject via @Inject, mark callable methods with @EasyTool, pass to withTools()
     - Transactions, security, and interceptors work normally (calls go
       through the container proxy)
     - You can mix EJBs with plain POJOs in the same withTools() call
-    - No special annotations, no JNDI lookup, no extra configuration
+    - No JNDI lookup, no extra configuration — just @EasyTool on the methods you expose
 
 
 ================================================================================
@@ -567,7 +596,8 @@
 
   Declare which CDI/EJB beans should be wired as tools directly in the
   annotation. The CDI extension resolves their live instances automatically.
-  No manual withTools() call needed.
+  No manual withTools() call needed. Opt-in still applies: only the @EasyTool
+  methods on those beans become callable.
 
     @EasyAIAssistant(
         systemMessage = "You are an e-commerce support bot",
@@ -621,8 +651,10 @@
 
   --- Key Concepts ---
 
-    withServices()       - registers your Java services (same as withTools()
-                           in AssistantBuilder, but semantically clearer)
+    withServices()       - registers your Java services, opt-in (same as
+                           withTools() in AssistantBuilder): only @EasyTool
+                           methods are callable. Escape hatch for prototypes:
+                           withAllPublicMethodsAsServices()
     withMaxSteps(n)      - caps the number of service calls per task execution
                            (strongly recommended — default is 10)
     withPlanningPrompt() - injects a built-in system message that instructs
@@ -1063,7 +1095,8 @@
             .build();
 
         OrdersAssistant assistant = EasyAI.assistant(OrdersAssistant.class)
-            .withTools(orderService)      // so it can ACT on "this"
+            .withTools(orderService)      // so it can ACT on "this" (orderService's
+                                          // cancel/find methods carry @EasyTool)
             .withActivityContext(ctx)     // so it KNOWS what "this" is
             .build();
 
@@ -1176,8 +1209,13 @@
 
   @EasyTool
     Where:    on a public method (in your service class)
-    Purpose:  adds a description to help the AI understand the method
-    Note:     OPTIONAL - methods work without it
+    Purpose:  REQUIRED gate (since 3.0.0) — exposes the method as a callable tool.
+              Only @EasyTool methods are visible to the model; everything else on
+              the service stays uncallable.
+    Attribute: value (optional) - description that helps the AI decide WHEN to
+              call it. A bare @EasyTool uses the method name as the description.
+    Escape hatch: withAllPublicMethodsAsTools()/withAllPublicMethodsAsServices()
+              expose every public method (prototypes only).
 
   @EasyRAG
     Where:    on an interface (alongside @EasyAIAssistant)
@@ -1226,11 +1264,11 @@
 
   dyntabs.ai.annotation
     @EasyAIAssistant            Marks assistant interfaces
-    @EasyTool                   Optional tool method description
+    @EasyTool                   Opt-in gate: exposes a method as a callable tool
     @EasyRAG                    Document-powered AI (RAG)
 
   dyntabs.ai.assistant
-    ToolIntrospector.java       Auto-discovers methods via reflection
+    ToolIntrospector.java       Discovers @EasyTool methods via reflection (opt-in)
     ToolMethod.java             Internal record (spec + method)
 
   dyntabs.ai.rag

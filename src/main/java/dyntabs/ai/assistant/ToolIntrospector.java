@@ -12,8 +12,18 @@ import dev.langchain4j.model.chat.request.json.JsonObjectSchema;
 import dyntabs.ai.annotation.EasyTool;
 
 /**
- * Uses reflection to discover public methods on POJOs and build
- * {@link ToolSpecification} instances without requiring {@code @Tool} annotations.
+ * Uses reflection to discover tool methods on POJOs (and EJB proxies) and build
+ * {@link ToolSpecification} instances for them.
+ *
+ * <p><b>Exposure policy (since 3.0.0):</b> two entry points with different safety postures.</p>
+ * <ul>
+ *   <li>{@link #introspect(Object...)} — <b>opt-in (default, safe):</b> only methods annotated
+ *       with {@link EasyTool} are turned into tools. Unannotated methods stay invisible to the
+ *       model. This is what {@code withTools(...)} uses.</li>
+ *   <li>{@link #introspectAllPublic(Object...)} — <b>escape hatch (unsafe):</b> every eligible
+ *       public method becomes a tool, annotated or not. This is what
+ *       {@code withAllPublicMethodsAsTools(...)} uses and should be reserved for prototypes.</li>
+ * </ul>
  */
 public final class ToolIntrospector {
 
@@ -28,23 +38,46 @@ public final class ToolIntrospector {
     };
 
     /**
-     * Discovers all eligible public methods on the given objects
-     * and creates {@link ToolMethod} entries for each.
+     * Discovers <b>opt-in</b> tool methods — those annotated with {@link EasyTool} — on the
+     * given objects and creates a {@link ToolMethod} entry for each. Unannotated methods are
+     * ignored, so they can never be invoked by the model.
      *
      * <p>If the object is a Jakarta EJB proxy (CDI/Weld-injected {@code @Stateless},
      * {@code @Stateful}, or {@code @Singleton} bean), the methods are read from
      * the actual bean class (the proxy's superclass) while the proxy instance is
      * kept as the invocation target. This ensures method calls still go through
      * the container pipeline (transactions, security, interceptors).</p>
+     *
+     * @param toolObjects the service objects to scan (POJOs or injected EJB proxies)
+     * @return one {@link ToolMethod} per {@code @EasyTool}-annotated method
      */
     public static List<ToolMethod> introspect(Object... toolObjects) {
+        return discover(false, toolObjects);
+    }
+
+    /**
+     * Discovers <b>every eligible public method</b> (annotated or not) on the given objects.
+     *
+     * <p><b>Unsafe by design.</b> This is the escape hatch behind
+     * {@code withAllPublicMethodsAsTools(...)} and exposes the whole public surface of the
+     * beans to the model. Prefer {@link #introspect(Object...)} plus {@link EasyTool}
+     * everywhere but throwaway prototypes.</p>
+     *
+     * @param toolObjects the service objects to scan (POJOs or injected EJB proxies)
+     * @return one {@link ToolMethod} per eligible public method
+     */
+    public static List<ToolMethod> introspectAllPublic(Object... toolObjects) {
+        return discover(true, toolObjects);
+    }
+
+    private static List<ToolMethod> discover(boolean exposeAll, Object... toolObjects) {
         List<ToolMethod> result = new ArrayList<>();
 
         for (Object obj : toolObjects) {
             Class<?> targetClass = resolveTargetClass(obj);
 
             for (Method method : targetClass.getDeclaredMethods()) {
-                if (isEligible(method)) {
+                if (isEligible(method, exposeAll)) {
                     ToolSpecification spec = buildSpecification(method);
                     // Use the proxy (obj) as invocation target, not the unwrapped class
                     result.add(new ToolMethod(spec, obj, method));
@@ -94,7 +127,7 @@ public final class ToolIntrospector {
         return false;
     }
 
-    private static boolean isEligible(Method method) {
+    private static boolean isEligible(Method method, boolean exposeAll) {
         if (!Modifier.isPublic(method.getModifiers())) return false;
         if (Modifier.isStatic(method.getModifiers())) return false;
         if (method.isSynthetic()) return false;
@@ -104,6 +137,10 @@ public final class ToolIntrospector {
             Object.class.getMethod(method.getName(), method.getParameterTypes());
             return false;
         } catch (NoSuchMethodException e) {
+            // Opt-in gate: unless the caller explicitly asked to expose everything,
+            // a method is only a tool if it carries @EasyTool. This is the safe default
+            // that keeps state-mutating methods off the model's reach until deliberately opted in.
+            if (!exposeAll && method.getAnnotation(EasyTool.class) == null) return false;
             return true;
         }
     }
@@ -112,9 +149,10 @@ public final class ToolIntrospector {
         ToolSpecification.Builder builder = ToolSpecification.builder()
                 .name(method.getName());
 
-        // Use @EasyTool description if present, otherwise use method name
+        // Use the @EasyTool description when it carries a non-blank one; otherwise (bare
+        // @EasyTool, or a method exposed via the escape hatch) fall back to the method name.
         EasyTool easyTool = method.getAnnotation(EasyTool.class);
-        if (easyTool != null) {
+        if (easyTool != null && !easyTool.value().isBlank()) {
             builder.description(easyTool.value());
         } else {
             builder.description(method.getName());

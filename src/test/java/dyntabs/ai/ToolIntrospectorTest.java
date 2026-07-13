@@ -12,12 +12,16 @@ import dyntabs.ai.assistant.ToolMethod;
 
 class ToolIntrospectorTest {
 
-    // Dummy POJO tool - no @Tool annotations needed
+    // Dummy POJO tool. Since 3.0.0 exposure is opt-in: only @EasyTool methods become tools.
     public static class OrderService {
+
+        // Bare @EasyTool -> exposed, description falls back to the method name.
+        @EasyTool
         public String findById(String orderId) {
             return "Order #" + orderId;
         }
 
+        // NOT annotated -> hidden by the opt-in default; visible only via the escape hatch.
         public List<String> findByCustomer(String customerName, int limit) {
             return List.of("order1", "order2");
         }
@@ -37,11 +41,31 @@ class ToolIntrospectorTest {
     }
 
     @Test
-    void discoversPublicMethods() {
+    void optInExposesOnlyAnnotatedMethods() {
         OrderService service = new OrderService();
         List<ToolMethod> tools = ToolIntrospector.introspect(service);
 
-        assertThat(tools).hasSize(3);
+        List<String> toolNames = tools.stream()
+                .map(tm -> tm.specification().name())
+                .toList();
+
+        // findByCustomer is NOT annotated -> must not be exposed.
+        assertThat(toolNames).containsExactlyInAnyOrder("findById", "cancelOrder");
+    }
+
+    @Test
+    void optInHidesUnannotatedMethod() {
+        OrderService service = new OrderService();
+        List<ToolMethod> tools = ToolIntrospector.introspect(service);
+
+        assertThat(tools.stream().map(tm -> tm.specification().name()).toList())
+                .doesNotContain("findByCustomer");
+    }
+
+    @Test
+    void exposeAllIncludesUnannotatedMethods() {
+        OrderService service = new OrderService();
+        List<ToolMethod> tools = ToolIntrospector.introspectAllPublic(service);
 
         List<String> toolNames = tools.stream()
                 .map(tm -> tm.specification().name())
@@ -53,7 +77,8 @@ class ToolIntrospectorTest {
     @Test
     void excludesObjectMethods() {
         OrderService service = new OrderService();
-        List<ToolMethod> tools = ToolIntrospector.introspect(service);
+        // Even the escape hatch must never surface Object's own methods.
+        List<ToolMethod> tools = ToolIntrospector.introspectAllPublic(service);
 
         List<String> toolNames = tools.stream()
                 .map(tm -> tm.specification().name())
@@ -76,7 +101,7 @@ class ToolIntrospectorTest {
     }
 
     @Test
-    void fallsBackToMethodNameAsDescription() {
+    void bareEasyToolFallsBackToMethodNameAsDescription() {
         OrderService service = new OrderService();
         List<ToolMethod> tools = ToolIntrospector.introspect(service);
 
@@ -89,9 +114,22 @@ class ToolIntrospectorTest {
     }
 
     @Test
+    void exposeAllUnannotatedFallsBackToMethodNameAsDescription() {
+        OrderService service = new OrderService();
+        List<ToolMethod> tools = ToolIntrospector.introspectAllPublic(service);
+
+        ToolMethod findByCustomer = tools.stream()
+                .filter(tm -> tm.specification().name().equals("findByCustomer"))
+                .findFirst()
+                .orElseThrow();
+
+        assertThat(findByCustomer.specification().description()).isEqualTo("findByCustomer");
+    }
+
+    @Test
     void detectsParametersCorrectly() {
         OrderService service = new OrderService();
-        List<ToolMethod> tools = ToolIntrospector.introspect(service);
+        List<ToolMethod> tools = ToolIntrospector.introspectAllPublic(service);
 
         ToolMethod findByCustomer = tools.stream()
                 .filter(tm -> tm.specification().name().equals("findByCustomer"))
@@ -116,6 +154,7 @@ class ToolIntrospectorTest {
     }
 
     public static class UserService {
+        @EasyTool
         public String getUser(String userId) {
             return "User " + userId;
         }
@@ -124,14 +163,17 @@ class ToolIntrospectorTest {
     // --- EJB proxy simulation tests ---
 
     /**
-     * Simulates a real @Stateless EJB bean class.
+     * Simulates a real @Stateless EJB bean class. One method is opted in via @EasyTool;
+     * the destructive one is deliberately left unannotated to prove it stays uncallable.
      */
     @jakarta.ejb.Stateless
     public static class InvoiceService {
+        @EasyTool("Creates an invoice for a customer")
         public String createInvoice(String customerId, double amount) {
             return "INV-001";
         }
 
+        // NOT annotated: a state-mutating method must not leak to the model by default.
         public boolean deleteInvoice(String invoiceId) {
             return true;
         }
@@ -164,9 +206,24 @@ class ToolIntrospectorTest {
     }
 
     @Test
-    void introspectFindsMethodsOnEjbProxy() {
+    void optInFindsOnlyAnnotatedMethodOnEjbProxy() {
         InvoiceService$Proxy$_$$_WeldSubclass proxy = new InvoiceService$Proxy$_$$_WeldSubclass();
         List<ToolMethod> tools = ToolIntrospector.introspect(proxy);
+
+        List<String> toolNames = tools.stream()
+                .map(tm -> tm.specification().name())
+                .toList();
+
+        // The confused-deputy fix: createInvoice is opted in, the destructive
+        // deleteInvoice stays invisible even though it is public on the EJB.
+        assertThat(toolNames).containsExactly("createInvoice");
+        assertThat(toolNames).doesNotContain("deleteInvoice");
+    }
+
+    @Test
+    void exposeAllFindsEveryMethodOnEjbProxy() {
+        InvoiceService$Proxy$_$$_WeldSubclass proxy = new InvoiceService$Proxy$_$$_WeldSubclass();
+        List<ToolMethod> tools = ToolIntrospector.introspectAllPublic(proxy);
 
         List<String> toolNames = tools.stream()
                 .map(tm -> tm.specification().name())

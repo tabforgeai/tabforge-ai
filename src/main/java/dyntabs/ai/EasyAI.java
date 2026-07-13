@@ -46,8 +46,9 @@ import com.google.gson.JsonParser;
  *     String ask(String question);
  * }
  *
- * // 2. Your existing service (no AI annotations needed!)
+ * // 2. Your existing service — mark callable methods with @EasyTool (opt-in)
  * public class OrderService {
+ *     @EasyTool("Finds an order by its ID")
  *     public String findOrder(String orderId) {
  *         return database.findById(orderId).toString();
  *     }
@@ -55,7 +56,7 @@ import com.google.gson.JsonParser;
  *
  * // 3. Wire it together
  * SupportBot bot = EasyAI.assistant(SupportBot.class)
- *     .withTools(orderService, userService)
+ *     .withTools(orderService, userService)   // only @EasyTool methods are exposed
  *     .build();
  *
  * // 4. The AI will automatically call orderService.findOrder("12345")

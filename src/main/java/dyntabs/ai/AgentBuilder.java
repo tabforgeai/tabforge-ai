@@ -58,6 +58,9 @@ public class AgentBuilder {
             "5. Once you have all the information needed, provide a clear final answer.";
 
     private final List<Object> serviceObjects = new ArrayList<>();
+    // Escape-hatch service objects: every public method is exposed, annotated or not.
+    // Kept separate from serviceObjects so opt-in and expose-all never cross-contaminate.
+    private final List<Object> allPublicServiceObjects = new ArrayList<>();
     private int maxSteps = DEFAULT_MAX_STEPS;
     private boolean planningPrompt = false;
     private String customSystemMessage;
@@ -69,11 +72,15 @@ public class AgentBuilder {
     AgentBuilder() {}
 
     /**
-     * Adds service objects whose public methods the agent can call.
+     * Adds service objects whose {@link dyntabs.ai.annotation.EasyTool @EasyTool}-annotated
+     * methods the agent can call.
+     *
+     * <p><b>Opt-in (since 3.0.0):</b> only methods you mark with {@code @EasyTool} become
+     * callable. Every other method — including state-mutating ones — stays invisible to the
+     * agent, so adding a method to a service is safe by default.</p>
      *
      * <p>Accepts plain POJOs and Jakarta EJB proxies ({@code @Stateless},
-     * {@code @Stateful}, {@code @Singleton}) obtained via {@code @Inject}.
-     * No annotations are needed on the service methods.</p>
+     * {@code @Stateful}, {@code @Singleton}) obtained via {@code @Inject}.</p>
      *
      * <pre>{@code
      * EasyAgent agent = EasyAI.agent()
@@ -83,10 +90,32 @@ public class AgentBuilder {
      *
      * @param services one or more service objects (POJOs or injected EJB proxies)
      * @return this builder
+     * @see #withAllPublicMethodsAsServices(Object...)
      */
     public AgentBuilder withServices(Object... services) {
         for (Object s : services) {
             this.serviceObjects.add(s);
+        }
+        return this;
+    }
+
+    /**
+     * Adds service objects and exposes <b>every public method</b> on them to the agent —
+     * annotated or not.
+     *
+     * <p><b>Unsafe escape hatch.</b> Restores the pre-3.0.0 "expose everything" behavior and
+     * opens the whole public surface of these beans to a model whose input is not fully trusted
+     * (confused-deputy risk). Reserve for throwaway prototypes; prefer
+     * {@link #withServices(Object...)} with {@link dyntabs.ai.annotation.EasyTool @EasyTool}
+     * for anything real.</p>
+     *
+     * @param services one or more service objects whose entire public surface becomes callable
+     * @return this builder
+     * @see #withServices(Object...)
+     */
+    public AgentBuilder withAllPublicMethodsAsServices(Object... services) {
+        for (Object s : services) {
+            this.allPublicServiceObjects.add(s);
         }
         return this;
     }
@@ -277,10 +306,17 @@ public class AgentBuilder {
             serviceBuilder.systemMessageProvider(id -> effectiveSystemMessage);
         }
 
-        // Tool registration with step listener and structured error feedback
-        if (!serviceObjects.isEmpty()) {
+        // Tool registration with step listener and structured error feedback.
+        // Opt-in services expose only @EasyTool methods; escape-hatch services expose all public.
+        if (!serviceObjects.isEmpty() || !allPublicServiceObjects.isEmpty()) {
             AtomicInteger stepCounter = new AtomicInteger(0);
-            List<ToolMethod> toolMethods = ToolIntrospector.introspect(serviceObjects.toArray());
+            List<ToolMethod> toolMethods = new ArrayList<>();
+            if (!serviceObjects.isEmpty()) {
+                toolMethods.addAll(ToolIntrospector.introspect(serviceObjects.toArray()));
+            }
+            if (!allPublicServiceObjects.isEmpty()) {
+                toolMethods.addAll(ToolIntrospector.introspectAllPublic(allPublicServiceObjects.toArray()));
+            }
             Map<ToolSpecification, ToolExecutor> toolMap = new HashMap<>();
 
             for (ToolMethod tm : toolMethods) {

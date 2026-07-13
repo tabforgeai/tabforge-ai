@@ -85,15 +85,21 @@ String answer = chat.send("What is a HashMap?");
 ```
 
 ```java
-// 2. Assistant that calls your Java services (no @Tool annotations needed)
+// 2. Assistant that calls your Java services — mark the callable methods with @EasyTool
 @EasyAIAssistant(systemMessage = "You are an e-commerce support bot.")
 public interface SupportBot {
     String ask(String question);
 }
 
-// OrderService is a plain POJO or @Stateless EJB — no changes needed
+// OrderService is a plain POJO or @Stateless EJB; @EasyTool opts each method in
+class OrderService {
+    @EasyTool("Finds an order by its ID")
+    public String findOrder(String orderId) { ... }
+    // methods without @EasyTool stay invisible to the model
+}
+
 SupportBot bot = EasyAI.assistant(SupportBot.class)
-    .withTools(orderService, userService)
+    .withTools(orderService, userService)   // opt-in: only @EasyTool methods exposed
     .build();
 
 bot.ask("Where is my order #12345?");
@@ -157,7 +163,7 @@ em.persist(inv);   // no AI from here on — it's just a typed object your code 
 
 ### What you get
 
-- **Zero-annotation tools** — pass any POJO or `@Inject`-ed EJB to `.withTools()`. EasyAI discovers methods via reflection. No `@Tool`, no schema, no config.
+- **Opt-in tools** — mark methods with `@EasyTool` and pass any POJO or `@Inject`-ed EJB to `.withTools()`. Only annotated methods are callable, so a prompt-injected model can't reach `cancelOrder`/`deleteUser` by accident. No schema, no config. *(Escape hatch `withAllPublicMethodsAsTools()` restores expose-everything for throwaway prototypes.)*
 - **EJB proxy support** — `@Stateless`, `@Stateful`, `@Singleton` beans work transparently. Container services (transactions, security, interceptors) are preserved.
 - **RAG from any source** — classpath, file path, or `byte[]` from a DMS, database BLOB, REST API, or user upload
 - **Persistent vector store** — `EasyAI.indexer().toMilvus(...).index(...)` writes embeddings to Milvus once; `.withMilvus(...)` lets any assistant query them. Survives restarts, shared across sessions and server nodes. Local embedding model included (no API key, runs offline)
@@ -241,7 +247,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>2.0.0</version>
+    <version>3.0.0</version>
 </dependency>
 ```
 

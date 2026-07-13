@@ -1,7 +1,7 @@
 # TabForge AI — LLM Context File
 # Use this file to understand the TabForge AI library API when helping developers write code.
 # GitHub: https://github.com/tabforgeai/tabforge-ai
-# Maven: io.github.tabforgeai:tabforge-ai:2.2.0
+# Maven: io.github.tabforgeai:tabforge-ai:3.0.0
 
 ## What is TabForge AI?
 
@@ -20,7 +20,7 @@ Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>2.2.0</version>
+    <version>3.0.0</version>
 </dependency>
 ```
 
@@ -91,14 +91,22 @@ String feedback = reviewer.review("public void foo() { ... }");
 
 ### 3. Assistant with Tools (AI calls your Java methods)
 
-**No @Tool annotations needed on your service classes.** Pass any POJO or EJB directly.
+**Tools are opt-in (since 3.0.0): only methods you mark with `@EasyTool` are callable.**
+Everything else on the service stays invisible to the model — so a prompt-injected
+model can't reach destructive methods like `cancelOrder`/`deleteUser`. Works on POJOs
+and injected EJB proxies alike.
 
 ```java
-// Your service — plain Java, no AI annotations needed
+// Your service — annotate the methods you want the AI to be able to call
 public class OrderService {
+    @EasyTool("Finds an order by its ID")
     public String findOrder(String orderId) { ... }
+
+    @EasyTool("Cancels an active order. Only works for unshipped orders.")
     public String cancelOrder(String orderId) { ... }
-    public List<String> getOrdersByCustomer(String email) { ... }
+
+    // NOT annotated -> the model can never see or call this
+    public void purgeAllOrders() { ... }
 }
 
 @EasyAIAssistant(systemMessage = "You are an e-commerce support bot.")
@@ -108,18 +116,16 @@ public interface SupportBot {
 
 OrderService orderService = new OrderService();
 SupportBot bot = EasyAI.assistant(SupportBot.class)
-    .withTools(orderService, userService)   // pass any number of services
+    .withTools(orderService, userService)   // opt-in: only @EasyTool methods exposed
     .build();
 
 bot.ask("Where is my order #12345?");
 // AI automatically calls orderService.findOrder("12345")
 ```
 
-Optional — add @EasyTool for better method descriptions (helps AI pick the right method):
-```java
-@EasyTool("Cancels an active order. Only works for unshipped orders.")
-public String cancelOrder(String orderId) { ... }
-```
+The `@EasyTool` description is optional (a bare `@EasyTool` uses the method name), but
+helps the AI pick the right method. Escape hatch for throwaway prototypes only —
+`withAllPublicMethodsAsTools(service)` exposes every public method, annotated or not.
 
 ### 4. RAG — Document-Powered AI
 
@@ -311,12 +317,12 @@ public interface SupportBot {
 ```
 
 ### EJB beans as tools
-Pass @Stateless, @Stateful, @Singleton EJBs directly — transactions, security, interceptors preserved.
+Mark callable methods with @EasyTool; pass @Stateless, @Stateful, @Singleton EJBs directly — transactions, security, interceptors preserved. Opt-in applies to EJBs too.
 ```java
-@Inject OrderService orderService;  // EJB proxy
+@Inject OrderService orderService;  // EJB proxy; its @EasyTool methods are the tools
 
 SupportBot bot = EasyAI.assistant(SupportBot.class)
-    .withTools(orderService)        // EJB proxy detected automatically
+    .withTools(orderService)        // EJB proxy detected automatically; only @EasyTool methods exposed
     .build();
 ```
 
@@ -353,7 +359,7 @@ public class AgentBean {
 | Annotation | Where | Purpose |
 |---|---|---|
 | `@EasyAIAssistant` | interface | Marks as AI assistant; `systemMessage` sets personality |
-| `@EasyTool` | method | Optional description to help AI pick the right method |
+| `@EasyTool` | method | **Opt-in gate (required to expose a method as a tool).** `value` (optional) describes it to help the AI pick the right method. Escape hatch: `withAllPublicMethodsAsTools()`/`withAllPublicMethodsAsServices()` |
 | `@EasyRAG` | interface | Loads documents for RAG; `source`, `maxResults`, `minScore` |
 | `@ActivityTracked` | method | Records a user-activity event when called; `type`, `verb`, `entityType`, `entityIdParams`, `includeText`. Read back via `.withActivityContext(...)` |
 

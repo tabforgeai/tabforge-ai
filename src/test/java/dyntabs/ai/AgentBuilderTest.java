@@ -17,6 +17,7 @@ import dev.langchain4j.model.chat.request.ChatRequest;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dyntabs.ai.agent.AgentStep;
 import dyntabs.ai.agent.StepListener;
+import dyntabs.ai.annotation.EasyTool;
 
 class AgentBuilderTest {
 
@@ -25,12 +26,14 @@ class AgentBuilderTest {
     // -------------------------------------------------------------------------
 
     static class OrderService {
+        @EasyTool("Returns the delivery status of an order")
         public String getOrderStatus(String orderId) {
             return "Order " + orderId + " is in transit";
         }
     }
 
     static class FailingService {
+        @EasyTool("Always throws, used to test error feedback")
         public String alwaysFails(String input) {
             throw new RuntimeException("DB connection lost");
         }
