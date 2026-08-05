@@ -1,7 +1,7 @@
 # TabForge AI — LLM Context File
 # Use this file to understand the TabForge AI library API when helping developers write code.
 # GitHub: https://github.com/tabforgeai/tabforge-ai
-# Maven: io.github.tabforgeai:tabforge-ai:3.0.0
+# Maven: io.github.tabforgeai:tabforge-ai:3.0.1
 
 ## What is TabForge AI?
 
@@ -20,7 +20,7 @@ Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>3.0.0</version>
+    <version>3.0.1</version>
 </dependency>
 ```
 

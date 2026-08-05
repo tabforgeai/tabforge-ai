@@ -247,7 +247,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>3.0.0</version>
+    <version>3.0.1</version>
 </dependency>
 ```
 

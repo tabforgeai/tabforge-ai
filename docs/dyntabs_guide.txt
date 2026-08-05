@@ -584,6 +584,43 @@
   registers the allowed roles. When a user opens the tab, InMemoryAccessCheckInterceptor
   checks the roles. If access is denied, the tab shows an error page.
 
+  Fail-closed (since 3.0.1): if you mark securedResource=true but forget to
+  declare allowedRoles (and add none via grantAccess() at startup), access is
+  DENIED, not granted — and a warning is logged. A secured tab with no rule is
+  a configuration mistake, and the safe default is to deny. (Before 3.0.1 this
+  case was granted, i.e. the tab was wide open.)
+
+  Where do the CURRENT user's roles come from?
+  InMemoryAccessCheckInterceptor.getUserRoles() reads a Set<String> from the
+  "user_roles" session attribute by default — a convenient default for a library
+  that cannot assume any particular security stack. In a real application you
+  usually already have an authenticated identity from the container, so the
+  recommended pattern is to subclass the interceptor and override getUserRoles()
+  to read straight from Jakarta Security (single source of truth):
+
+    @Interceptor
+    @AccessCheck
+    public class SecurityContextAccessCheckInterceptor
+            extends InMemoryAccessCheckInterceptor {
+
+        private static final Set<String> KNOWN_ROLES = Set.of("ADMIN", "USER");
+
+        @Override
+        protected Set<String> getUserRoles() {
+            FacesContext fc = FacesContext.getCurrentInstance();
+            if (fc == null) return Set.of();
+            Set<String> roles = new HashSet<>();
+            for (String role : KNOWN_ROLES)
+                if (fc.getExternalContext().isUserInRole(role)) roles.add(role);
+            return roles;
+        }
+    }
+
+  Then enable YOUR subclass in beans.xml instead of security.InMemoryAccessCheckInterceptor.
+  The tabforge-ai-demo does exactly this, and also protects its REST layer with a
+  <security-constraint> on /api/* so the platform, not the interceptor, guards
+  non-JSF endpoints.
+
   --- B) DB-based (admin-managed roles) ---
 
   Implement a custom DBSecuredResourceScanner (extends AbstractSecuredResourceScanner)
@@ -592,7 +629,10 @@
   Roles are managed through an Admin UI instead of annotations.
 
   With DB-based approach, set securedResource=true in @DynTab but leave
-  allowedRoles empty — access rules live in the database.
+  allowedRoles empty — access rules live in the database. (The fail-closed
+  default described above belongs to the InMemory interceptor; your
+  DBAccessCheckInterceptor decides its own policy from the database, so empty
+  allowedRoles is expected here, not a misconfiguration.)
 
 
 ================================================================================
@@ -610,7 +650,9 @@
       uniqueIdentifier       - ID for duplicate detection (default: derived from name)
       parameters             - key=value pairs passed to the bean
       securedResource        - marks tab as access-controlled (default: false)
-      allowedRoles           - roles that can open the tab (declarative security)
+      allowedRoles           - roles that can open the tab (declarative security).
+                               With the InMemory interceptor, a secured tab with
+                               NO allowedRoles is denied (fail-closed, since 3.0.1).
       securedResourceDisplayName - display name for admin UI
 
   @TabScoped
