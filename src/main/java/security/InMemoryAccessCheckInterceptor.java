@@ -21,7 +21,8 @@ import jakarta.interceptor.Interceptor;
  *   <li>Then, checks roles added programmatically via {@link #grantAccess(String, String...)}
  *       (useful for adding rules at runtime without redeployment).</li>
  *   <li>If a resource is secured but has no allowed roles from either source,
- *       access is allowed (there is no point in having a dead resource).</li>
+ *       access is <b>denied</b> (fail-closed). A secured resource with no rule is a
+ *       configuration mistake; the safe default is to deny, not silently grant.</li>
  * </ol>
  *
  * <p><b>Declarative access (primary — recommended):</b></p>
@@ -129,11 +130,16 @@ public class InMemoryAccessCheckInterceptor extends AbstractAccessCheckIntercept
             }
         }
 
-        // 3. Resource is secured but has no allowed roles from either source — allow access
-        //    (there is no point in having a dead resource that nobody can access)
+        // 3. Resource is secured but has no allowed roles from either source.
+        //    Fail CLOSED: deny. A secured resource with no rule is a configuration
+        //    mistake, and the safe default is to deny rather than silently grant.
+        //    (Was fail-open before 3.0.1 — a resource you forgot to give roles was
+        //    wide open. Now it denies loudly instead.)
         if (declaredRoles.isEmpty() && (programmaticRoles == null || programmaticRoles.isEmpty())) {
-            log.warn("Resource {} is secured but has no allowed roles defined — allowing access", resource);
-            return true;
+            log.warn("Resource {} is secured but has no allowed roles defined — DENYING access (fail-closed). "
+                    + "Declare allowedRoles on @DynTab/@AccessCheck, or call grantAccess(resource, roles...) at startup.",
+                    resource);
+            return false;
         }
 
         return false;
