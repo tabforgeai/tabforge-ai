@@ -13,15 +13,24 @@
   complexity behind a simple builder-pattern API. You don't need to know anything
   about ChatModel, AiServices, ToolSpecification, or EmbeddingStore.
 
-  You just need to know 6 things:
+  You just need to know 7 things:
     1. EasyAI.chat()       - for simple conversations
     2. EasyAI.assistant()  - for smart assistants that can call your Java code
     3. @EasyRAG            - for AI that answers questions from your documents
     4. EasyAI.agent()      - for autonomous multi-step task execution
-    5. EasyAI.indexer()    - to store documents in a vector database (Milvus)
+                             (the LLM decides the order)
+    5. EasyAI.flow()       - for a KNOWN business process: YOU fix the order,
+                             the LLM is called only at the edges
+    6. EasyAI.indexer()    - to store documents in a vector database (Milvus)
                              for persistent, large-scale RAG
-    6. EasyAI.extract()    - to turn unstructured text or documents into
+    7. EasyAI.extract()    - to turn unstructured text or documents into
                              typed Java objects (records / POJOs)
+
+  These seven are building blocks. In a real app they do NOT each get their own
+  chat box — they sit behind ONE chat window (the template's AI panel), backed by
+  a single assistant that the model routes for you. The demo shows each capability
+  in its own panel only because it is a gallery. See the chapter "PUTTING IT
+  TOGETHER: ONE CHAT WINDOW FOR YOUR WHOLE APP" for how it all becomes one surface.
 
 
 ================================================================================
@@ -33,8 +42,13 @@
   The following dependencies are included:
     - langchain4j           (core AI services)
     - langchain4j-open-ai   (OpenAI provider)
-    - langchain4j-easy-rag   (document processing + local embedding model for RAG)
-    - langchain4j-milvus     (persistent vector store - see USE CASE 9)
+    - langchain4j-easy-rag   (document processing + local embedding model for RAG) *
+    - langchain4j-milvus     (persistent vector store - see USE CASE 10)            *
+
+    * As of 3.1.0 these two are OPTIONAL (marked <optional> in the library pom), so
+      they are NOT pulled into your WAR automatically. A chat/tools-only app needs
+      neither. If you use withRAG(...), withMilvus(...) or extract().from(document),
+      add them to your own pom (see "Optional RAG & Milvus dependencies" in USE CASE 10).
 
   Step 2: Configuration
   ------------------------------------------------
@@ -409,7 +423,7 @@
   Note: every approach above is EPHEMERAL — documents are embedded into an
   in-memory store on each build() and vanish when the app stops. For a large or
   shared document set that must survive restarts, embed once into a persistent
-  vector database instead — see USE CASE 9 (Milvus).
+  vector database instead — see USE CASE 10 (Milvus).
 
 
 ================================================================================
@@ -740,14 +754,15 @@
 
   Improves reliability for complex tasks with conditional branching.
 
-  --- EasyAgent vs. EasyAI.assistant() ---
+  --- EasyAgent vs. EasyAI.assistant() vs. EasyAI.flow() ---
 
     Scenario                                Use
     ------------------------------------    ----------------------------------
     Single question, structured answer      EasyAI.assistant()
-    Multi-step task, autonomous execution   EasyAI.agent()
-    Workflow with conditional branching     EasyAI.agent()
-    Known fixed sequence of calls           EasyAI.assistant() or manual code
+    Multi-step task, LLM plans the order    EasyAI.agent()
+    Open-ended workflow, order unknown      EasyAI.agent()
+    KNOWN business process, fixed order     EasyAI.flow()   (see USE CASE 9)
+    Correctness-critical (money/state)      EasyAI.flow()   (see USE CASE 9)
 
   --- Important Notes ---
 
@@ -758,7 +773,8 @@
 
   2. Determinism: the LLM may make different decisions for the same input.
      Do not use EasyAgent for financial transactions without a human-in-the-loop
-     confirmation step.
+     confirmation step. For a deterministic order on a KNOWN process, use
+     EasyAI.flow() instead (USE CASE 9) — same services, fixed order, testable.
 
   3. Token cost: each tool call adds tokens to the conversation. With 10 steps
      and GPT-4o, one agent.execute() can cost significantly more than one
@@ -766,8 +782,174 @@
 
 
 ================================================================================
-  USE CASE 9: Persistent Knowledge Base with Milvus (Index Once, Ask Forever)
+  USE CASE 9: EasyAI.flow() (Deterministic Step Pipeline — LLM Only at the Edges)
 ================================================================================
+
+  EasyAI.flow() is the disciplined counterpart to EasyAI.agent(). Where an agent
+  lets the LLM decide which service to call next (great when the path is genuinely
+  unknown, but non-deterministic and hard to test), a flow runs a fixed sequence
+  of NAMED steps that YOU author in plain Java. The LLM is invited in only at the
+  edges you choose — typically "understand" the request at the start and
+  "summarize" the outcome at the end. Everything in between is ordinary Java.
+
+  Motto: LLM for language, Java for logic.
+
+  Use a flow for a KNOWN business process — check stock, take payment, create
+  order, ship — where there is exactly one correct order and it must be the same
+  every time. That order is a domain invariant (you can't pay before you know the
+  price), so there is nothing for a planner to "discover": you already know it.
+  That is the point, not a limitation.
+
+  --- Key Concepts ---
+
+    .step(name, fn)          - a named step; fn is a function of the shared
+                               FlowContext, returning this step's result
+    FlowContext              - the immutable value-bag threaded through the steps:
+                                 ctx.input() / ctx.inputText()  - the run() argument
+                                 ctx.get(name, Type.class)      - a prior step's
+                                                                  result, typed
+                                 ctx.has(name)                  - did that step run?
+                                 ctx.result()                   - the last result
+                                 ctx.trail()                    - "name -> value"
+                                                                  lines (feed to a
+                                                                  summarize step)
+    .stepIf(name, cond, fn)  - runs the step only if cond.test(ctx) is true;
+                               otherwise it is skipped (stores no result)
+    .step(name, fn)
+        .orElse(altFn)       - fallback: if the primary step throws, try altFn
+                               (chain more .orElse for further alternatives)
+    .withEventListener(l)    - same live EasyAIEvent stream as agent() (Source.FLOW)
+    .run(input)              - executes the steps, returns the final FlowContext
+
+  --- Minimal Example ---
+
+    FlowContext out = EasyAI.flow()
+        .step("understand", ctx ->
+            EasyAI.extract(OrderRequest.class).from(ctx.inputText()))     // LLM edge
+        .step("checkStock", ctx ->
+            inventory.checkStock(ctx.get("understand", OrderRequest.class)))
+        .step("summarize", ctx ->
+            EasyAI.chat().build().send("Summarize:\n" + ctx.trail()))     // LLM edge
+        .build()
+        .run("Order 3 blue watches, ship home.");
+
+    String reply = (String) out.result();   // the "summarize" step's output
+
+  --- Full Example (the demo's order pipeline) ---
+
+    @Inject InventoryService inventory;
+    @Inject PaymentService   payment;
+    @Inject OrderService     orders;
+
+    Flow orderFlow = EasyAI.flow()
+        .step("understand", ctx ->
+            EasyAI.extract(OrderRequest.class).from(ctx.inputText()))     // LLM edge
+        .step("checkStock", ctx -> {
+            OrderRequest r = ctx.get("understand", OrderRequest.class);
+            return inventory.checkStock(r.product(), r.quantity());
+        })
+        .stepIf("reserve",
+            ctx -> !ctx.get("checkStock", Boolean.class),                 // only if NOT in stock
+            ctx -> {
+                OrderRequest r = ctx.get("understand", OrderRequest.class);
+                return inventory.getFromWarehouse(r.product(), r.quantity(),
+                                                  r.alternateWarehouse());
+            })
+        .step("pay", ctx -> {
+            OrderRequest r = ctx.get("understand", OrderRequest.class);
+            return payment.processPayment(299.0 * r.quantity(), "card");
+        })
+            .orElse(ctx -> "PAY-BACKUP")                                  // if the primary throws
+        .step("createOrder", ctx -> {
+            OrderRequest r = ctx.get("understand", OrderRequest.class);
+            String reservation = ctx.has("reserve")
+                ? ctx.get("reserve", String.class) : "main-stock";
+            return orders.createOrder(r.product(), reservation, ctx.get("pay", String.class));
+        })
+        .step("summarize", ctx ->
+            EasyAI.chat().build().send("Tell the user what happened:\n" + ctx.trail())) // LLM edge
+        .withEventListener(activityBridge)   // live timeline in the Activity Panel
+        .build();
+
+    String reply = (String) orderFlow.run(userText).result();
+
+  --- What a flow buys you over an agent loop ---
+
+    1. Correctness    - the money/state path runs in the SAME order every time.
+    2. Testability    - mock the LLM at the edges and assert invariants
+                        ("stock is checked before pay"); each step is a pure
+                        function of its FlowContext, unit-testable in isolation
+                        (build a FlowContext with a canned prior result, no LLM).
+    3. Safety         - a prompt-injection can't reorder or invent steps; the
+                        model does not drive.
+    4. Cost/latency   - two LLM calls at the edges, not six-plus in a loop.
+    5. Explainability - the run is your code + ctx.trail(), not the model's
+                        monologue.
+
+  --- stepIf vs. a plain in-step if ---
+
+  A plain Java `if` INSIDE a normal .step(...) is perfectly fine for a simple
+  conditional. Use .stepIf(name, cond, fn) when you want the branch to be a
+  first-class, NAMED, skippable step — visible in ctx.trail(), in the live event
+  stream (a skipped step emits a WARNING "skipped" row), and testable on its own.
+  A skipped step stores no result, so ctx.has(name) stays false for later steps.
+
+  --- orElse: declared fallback, not a search ---
+
+  .orElse(altFn) is GOAP's "try another way when a step fails" — but DECLARED, not
+  discovered. If the primary step throws, alternatives run in registration order
+  until one succeeds (its result is stored under the step name). If all throw, the
+  flow aborts with FlowException, whose stepName() names the failing step and whose
+  cause is the FIRST error. There is no planner: you author the alternatives.
+
+  --- agent() vs. flow() ---
+
+    Scenario                                Use
+    ------------------------------------    ----------------------------------
+    Path unknown, let the LLM plan          EasyAI.agent()
+    Known business process, fixed order     EasyAI.flow()
+    Correctness-critical (money/state)      EasyAI.flow()
+    Need a per-step live timeline (UI)      either — both emit EasyAIEvent
+
+  --- Important Notes ---
+
+  1. The flow itself has NO ChatModel dependency — the LLM lives only inside the
+     steps you write (via EasyAI.extract() / EasyAI.chat()). A flow with no LLM
+     step at all is just a typed, observable pipeline.
+
+  2. Transactions: like EasyAgent, a flow does not manage transactions across
+     steps. Design services to be idempotent or add compensating steps.
+
+  3. A step may throw a checked exception; the flow wraps it in FlowException
+     (unless an .orElse alternative recovers) and stops the pipeline.
+
+
+================================================================================
+  USE CASE 10: Persistent Knowledge Base with Milvus (Index Once, Ask Forever)
+================================================================================
+
+  --- Optional RAG & Milvus dependencies (3.1.0+) ---
+
+  Since 3.1.0, langchain4j-easy-rag and langchain4j-milvus are declared <optional>
+  in the TabForge AI pom, so they do NOT land in your WAR by default -- a chat/tools
+  app should not carry a vector-store client it never uses. They load lazily (only
+  RagEngine/MilvusEngine touch them, and only when you configure RAG/Milvus), so a
+  WAR that never calls these features never loads the jars. To use THIS use case (or
+  USE CASE 4 RAG, or extract().from(document)), add them to your own pom:
+
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-easy-rag</artifactId>
+      <version>1.16.3</version>
+    </dependency>
+    <dependency>
+      <groupId>dev.langchain4j</groupId>
+      <artifactId>langchain4j-milvus</artifactId>   <!-- only for withMilvus(...) -->
+      <version>1.16.3</version>
+    </dependency>
+
+  (langchain4j and langchain4j-open-ai stay mandatory; only the RAG/Milvus jars moved
+  to optional. Demo and starter don't use RAG, so their WARs are unaffected.)
 
   USE CASE 4 (RAG) loads and embeds your documents fresh every time you build an
   assistant, into an in-memory store that disappears when the app restarts. That
@@ -909,7 +1091,7 @@
 
 
 ================================================================================
-  USE CASE 10: Structured Extraction (Text/Document -> Typed Java Object)
+  USE CASE 11: Structured Extraction (Text/Document -> Typed Java Object)
 ================================================================================
 
   Everything above produces text. This one produces TYPED DATA: hand EasyAI an
@@ -1002,7 +1184,7 @@
 
 
 ================================================================================
-  USE CASE 11: Ambient Activity Memory (The Assistant Knows What You Just Did)
+  USE CASE 12: Ambient Activity Memory (The Assistant Knows What You Just Did)
 ================================================================================
 
   Every use case above answers the exact question the user types. But people
@@ -1158,6 +1340,204 @@
 
 
 ================================================================================
+  PUTTING IT TOGETHER: ONE CHAT WINDOW FOR YOUR WHOLE APP
+================================================================================
+
+  If you have looked at the demo application and counted five or six separate
+  chat boxes, this section is the one to read. That layout is a GALLERY, not a
+  blueprint: each panel isolates ONE capability (plain chat, assistant, RAG,
+  tools, agent, flow) so you can see each API on its own. A real application
+  does NOT work that way.
+
+  A real application needs exactly ONE chat window — and the pf-modern-template
+  already gives you one (the slide-out AI panel). Everything the user says can
+  go through it.
+
+  --- The question everyone asks first ---
+
+  "If I have one window, how does it know what to call — chat? a tool? RAG?"
+
+  Most of the time you do NOT route anything yourself, and you do NOT need an
+  orchestrator. The routing is done by the MODEL, inside a single assistant.
+
+  EasyAI.assistant() already unifies chat + tools + RAG + ambient context behind
+  ONE ask() method. You wire one assistant, give it everything it might need,
+  and for each message the model itself decides whether to just answer, call one
+  of your tools, or pull from your documents.
+
+  --- The pattern: one assistant behind the panel ---
+
+    @EasyAIAssistant(systemMessage =
+        "You are the assistant for the Acme app. Answer the user, and use the " +
+        "available tools when they ask you to do something.")
+    public interface AppAssistant {
+        String ask(String message);
+    }
+
+    // Build it ONCE (e.g. @SessionScoped, so chat memory persists):
+    AppAssistant assistant = EasyAI.assistant(AppAssistant.class)
+        .withTools(orderService, inventoryService, paymentService) // it can ACT   (USE CASE 3/5)
+        .withRAG(policyDocs)                                        // it can CITE  (USE CASE 4)
+        .withActivityContext(ctx)                                  // it knows "this" (USE CASE 12)
+        .build();
+
+    String reply = assistant.ask(userMessage);   // ONE call — the model decides what to do
+
+  Now the single window handles all of these, with no routing code from you:
+
+    user types                          what the model does
+    --------------------------------    ------------------------------------------
+    "explain what an EJB is"            answers directly (plain chat)
+    "cancel order ORD-002"             calls orderService.cancelOrder("ORD-002")
+    "cancel this"                      ambient context resolves "this" -> cancelOrder
+    "how many vacation days?"          answers from the RAG documents
+    "is the X200 in stock?"            calls inventoryService.checkStock(...)
+
+  That is the 80% case: one window, one assistant, the model routes internally.
+
+  --- Where the single window lives (in the demo) ---
+
+    the template's AI panel  ->  POST /api/ai/chat  ->  a @SessionScoped bean
+        ->  assistant.ask(userMessage)  ->  reply streamed back to the panel
+
+  In the demo this bean is GlobalAiAssistantBean (backing NavigatorAssistant).
+  Session-scoped, so the conversation and memory persist for the whole visit.
+  Give that one assistant your tools + RAG + activity context and it becomes the
+  single front door for the entire app.
+
+  --- What does NOT go through the chat window ---
+
+  "One chat window" means the CONVERSATIONAL surface is single — not that every
+  feature is a chat message. Two capabilities are normally triggered by your
+  application CODE, not by the user typing:
+
+    - EasyAI.extract() (USE CASE 11) runs when a document is uploaded or a form
+      is submitted — a typed call your code makes, not a chat turn.
+    - EasyAI.flow() (USE CASE 9) is a deterministic pipeline you kick off from a
+      button or an action. (If you want, the assistant can even call a flow as
+      one of its tools — but the flow itself is still code, not a conversation.)
+
+  --- When you DO want an orchestrator (the exception, not the rule) ---
+
+  You only need a router when you deliberately keep several DISTINCT specialized
+  backends — say a deterministic flow() for orders, a separate policy RAG bot,
+  and a general chat — and you want one window to dispatch to the right one.
+  Then put a thin classifier in front of the panel:
+
+    String backend = classifyIntent(userMessage);   // cheap: keywords, or one LLM call
+    return switch (backend) {
+        case "order"  -> runOrderFlow(userMessage);
+        case "policy" -> policyBot.ask(userMessage);
+        default       -> appAssistant.ask(userMessage);
+    };
+
+  This is optional. Reach for it only when a single assistant genuinely cannot
+  represent all your backends — most apps never need it.
+
+  --- In one line ---
+
+  One window, one assistant, tools + RAG + ambient context, the model routes.
+  N windows exist only in a demo gallery — never ship them in a real app.
+
+  --- Tab-aware tools (one panel that behaves per tab) ---
+
+  In a multi-tab app you usually want the ONE panel to offer only the tools that
+  make sense where the user currently is: order tools on the Orders tab, none on
+  Home. This is least privilege per surface — the agent can only act where it
+  makes sense, so "cancel order ORD-002" acts on the Orders tab and is politely
+  declined on Home.
+
+  Three pieces make it work:
+
+    1. Know the active tab — WITHOUT a FacesContext. The panel's messages arrive
+       over REST, so @ViewScoped tab state is out of reach. Instead read the
+       ambient timeline you already have: every @DynTab(trackActivity = true) tab
+       records a NAVIGATION event carrying its uniqueIdentifier, so the most
+       recent one is "where the user is now".
+
+         String tabType = null;
+         for (var e : reverse(activityStore.recent(sessionId, null, 50))) {
+             if (e.type() == UserActivityEvent.Type.NAVIGATION
+                     && e.primaryEntity() != null
+                     && "tab".equals(e.primaryEntity().type())) {
+                 tabType = e.primaryEntity().id();   // "Orders" / "Home"
+                 break;
+             }
+         }
+
+    2. Pick the tools for that tab, then build with just those:
+
+         Object[] tools = "Orders".equals(tabType)
+                 ? new Object[]{ orderService } : new Object[0];
+         assistant = EasyAI.assistant(NavigatorAssistant.class)
+                 .withTools(tools)
+                 .withActivityContext(ctx)      // stays session-wide: "where am I?"
+                 .withChatMemory(sharedMemory)  // see below
+                 .build();
+
+    3. Keep ONE conversation across tab switches. Tools are fixed at build() time,
+       so changing them means rebuilding the assistant — and withMemory(int) would
+       mint a fresh, empty memory each time, wiping the chat. Hold ONE ChatMemory
+       yourself and pass it to every rebuild with withChatMemory(...); rebuild only
+       when the tab TYPE changes:
+
+         if (assistant == null || !Objects.equals(tabType, builtFor)) {
+             /* build as above with the shared memory */ ;
+             builtFor = tabType;
+         }
+
+  A tip on the system message: tell the assistant it only has the current tab's
+  tools, so when it lacks a matching tool it declines and points the user to the
+  right tab instead of pretending it acted.
+
+  --- After a tool changes data, the UI will NOT refresh by itself ---
+
+  A tool that MUTATES data (cancel, approve, ship) leaves the screen stale: the
+  tool runs outside the JSF request (the panel called over REST), so there is no
+  ajax response to repaint the tab that shows that data. Refreshing the UI is an
+  application concern, not the assistant's — EasyAI deliberately stays
+  transport-agnostic and knows nothing about tabs or the DOM.
+
+  The full recipe (fire an inter-tab event so every open tab re-reads its data,
+  then push a small "data-changed" signal over SSE to repaint the visible tab)
+  lives in dyntabs_guide.txt, "USE CASE 10: Refreshing the UI after an AI tool
+  changes data". Read it whenever your tools change state.
+
+
+  --- Proactive suggestions (letting the assistant speak first) ---
+
+  Normally the assistant is reactive: it answers when asked. You can also make it
+  PRO-ACTIVE — notice a pattern in the user's recent activity and volunteer a
+  useful next step as a dismissible chip, unprompted.
+
+  The discipline is exactly the same as flow(): a DETERMINISTIC rule decides IF and
+  WHAT to suggest; the LLM is used ONLY to phrase the chosen suggestion into one
+  sentence. Never let a model scan the activity log and decide on its own what to
+  offer — that is slow, costly, and an injection surface.
+
+  EasyAI already gives you the two AI pieces this needs:
+
+    - the Ambient Activity timeline (see "Ambient Activity Memory" above) is the
+      SENSOR your rule reads from;
+    - a tiny assistant (no tools, no context, withMemory(0)) is the PHRASER that
+      turns the rule's facts into the sentence.
+
+  Your application supplies the rule and the delivery (pushing a suggestion event
+  over the panel's SSE stream, rendering the chip, and — on accept — injecting the
+  suggestion's ready-made prompt back into the ordinary chat so the existing
+  tab-aware assistant carries it out).
+
+  This builds on features set up earlier: an AI panel wired over SSE (the
+  tabforge-ai-starter ships this), Ambient Activity recording turned on for the
+  actions you react to (you add this for your domain), and a chat assistant that
+  can carry out the accepted prompt. The full step-by-step — those prerequisites,
+  the timing discipline (detect synchronously, phrase + push on a background
+  thread, cooldown per suggestion), and demo file references — lives in
+  dyntabs_guide.txt, "USE CASE 11: Proactive suggestions (when the app speaks
+  first)".
+
+
+================================================================================
   CONFIGURATION REFERENCE
 ================================================================================
 
@@ -1172,7 +1552,7 @@
   easyai.temperature     Creativity (0.0 to 1.0)        (provider default)
   easyai.max-tokens      Max response length             (provider default)
 
-  Milvus vector store (optional - see USE CASE 9):
+  Milvus vector store (optional - see USE CASE 10):
 
   Property                  Description                  Default
   ------------------------  ---------------------------  -----------
@@ -1226,7 +1606,7 @@
       minScore   - minimum relevance threshold (default 0.5)
     Alternative: use .withRAG(DocumentSource...) for byte[] content
 
-  @ActivityTracked                                       (see USE CASE 11)
+  @ActivityTracked                                       (see USE CASE 12)
     Where:    on a public method (in your service class)
     Purpose:  records a user-activity event when the method is called, so an
               assistant wired with .withActivityContext(...) can later resolve
@@ -1245,7 +1625,7 @@
 ================================================================================
 
   dyntabs.ai
-    EasyAI.java                 Main entry point (chat / assistant / agent)
+    EasyAI.java                 Main entry point (chat / assistant / agent / flow)
     EasyAIConfig.java           Configuration object
     EasyAIConfigLoader.java     Loads from easyai.properties
     ModelFactory.java           Creates AI model (OpenAI/Ollama)
@@ -1254,6 +1634,8 @@
     AssistantBuilder.java       Builder for AI assistants
     EasyAgent.java              Agent with execute(task) method
     AgentBuilder.java           Builder for EasyAgent
+    Flow.java                   Deterministic step pipeline with run(input) (EasyAI.flow())
+    FlowBuilder.java            Builder: .step / .stepIf / .orElse / .withEventListener
     IndexerBuilder.java         Builder: picks the vector store (EasyAI.indexer())
     EasyIndexer.java            Indexes documents into the vector store (.index())
     ExtractionBuilder.java      Builder: text/document -> typed object (EasyAI.extract())
@@ -1261,6 +1643,11 @@
   dyntabs.ai.agent
     AgentStep.java              Record: stepNumber, toolName, arguments, result
     StepListener.java           @FunctionalInterface - callback per tool call
+
+  dyntabs.ai.flow                                        (see USE CASE 9)
+    FlowContext.java            Immutable typed value-bag threaded through steps
+    FlowStep.java               @FunctionalInterface - one step: FlowContext -> result
+    FlowException.java          Thrown when a step fails; stepName() names it
 
   dyntabs.ai.annotation
     @EasyAIAssistant            Marks assistant interfaces
@@ -1282,7 +1669,7 @@
     ExtractionEngine.java       Prompt -> model -> JSON -> typed object (+ retry, validate)
     ExtractionException.java    Thrown when extraction or validation fails
 
-  dyntabs.ai.activity                                    (see USE CASE 11)
+  dyntabs.ai.activity                                    (see USE CASE 12)
     UserActivityEvent.java      Immutable timeline entry (verb, entities, tab)
     EntityRef.java              Pointer to a business entity (type + id + label)
     @ActivityTracked            Records an event when an annotated method runs
@@ -1329,7 +1716,7 @@
      Without it, tool calls are a black box — you won't know what the agent
      called, with what arguments, or what it got back. Log every step.
 
-  8. Always wrap bot.ask(), chat.send(), and agent.execute() in try-catch in production code.
+  8. Always wrap bot.ask(), chat.send(), agent.execute(), and flow.run() in try-catch in production code.
      AI calls can fail (network issues, rate limits, bad model output). Use
      EasyAI.extractErrorMessage(e) to get a clean, readable message instead
      of raw JSON from the provider:
@@ -1351,3 +1738,10 @@
        dev.langchain4j.exception.RateLimitException       - rate limit exceeded
        dev.langchain4j.exception.InvalidRequestException  - bad request / tool call failure
        dev.langchain4j.exception.InternalServerException  - provider server error
+
+  9. Reach for EasyAI.flow() when the ORDER is known and correctness matters
+     (money, stock, state). You author the sequence; the LLM is called only at
+     the edges. It runs the same way every time, and each step is unit-testable —
+     build a FlowContext with a canned prior result and call the step directly,
+     no live model needed. If the path is genuinely open-ended, use EasyAI.agent()
+     instead. See USE CASE 9.

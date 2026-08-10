@@ -132,7 +132,23 @@ String result = agent.execute("Process order #42: verify stock, charge the card,
 ```
 
 ```java
-// 5. Persistent RAG — index documents once into a vector store, query them forever
+// 5. Deterministic pipeline — YOU fix the order in Java, the LLM is called only at the edges
+FlowContext out = EasyAI.flow()
+    .step("understand", ctx -> EasyAI.extract(OrderRequest.class).from(ctx.inputText())) // LLM: text → typed
+    .step("checkStock", ctx -> inventory.checkStock(ctx.get("understand", OrderRequest.class)))
+    .step("pay",        ctx -> payment.charge(ctx.get("understand", OrderRequest.class)))
+    .step("createOrder",ctx -> orders.create(ctx.get("understand", OrderRequest.class)))
+    .step("summarize",  ctx -> EasyAI.chat().build()
+                                  .send("Tell the user what happened:\n" + ctx.trail()))    // LLM: summary
+    .build()
+    .run("Order 3 blue watches, ship home.");
+
+String reply = (String) out.result();
+// The money/state path runs in the SAME order every time — the model can't reorder or invent steps
+```
+
+```java
+// 6. Persistent RAG — index documents once into a vector store, query them forever
 EasyAI.indexer()
     .toMilvus("localhost", 19530, "company_kb")
     .index("file:/data/handbook.pdf");          // also accepts byte[] from a DMS, DB BLOB, or upload
@@ -149,7 +165,7 @@ bot.ask("How many vacation days do employees get?");
 ```
 
 ```java
-// 6. Structured extraction — turn unstructured text or a document into a typed Java object
+// 7. Structured extraction — turn unstructured text or a document into a typed Java object
 record Invoice(String vendor, String invoiceNumber, LocalDate date,
                BigDecimal total, List<LineItem> items) {}
 
@@ -169,6 +185,7 @@ em.persist(inv);   // no AI from here on — it's just a typed object your code 
 - **Persistent vector store** — `EasyAI.indexer().toMilvus(...).index(...)` writes embeddings to Milvus once; `.withMilvus(...)` lets any assistant query them. Survives restarts, shared across sessions and server nodes. Local embedding model included (no API key, runs offline)
 - **Structured extraction** — `EasyAI.extract(Invoice.class).from(text or PDF)` returns a populated record/POJO. Parses the document, extracts, retries on malformed output, and optionally runs Jakarta Bean Validation — in one call
 - **Autonomous agent** — `EasyAI.agent()` executes multi-step tasks across your services without manual orchestration. Built-in step limit, step listener, and planning prompt.
+- **Deterministic flow** — `EasyAI.flow()` runs named steps in the order *you* declare in Java, calling the LLM only at the edges (understand / summarize). For a known business process (check stock → pay → ship) where the order is fixed and correctness beats flexibility: same order every run, unit-testable, injection-safe. The disciplined counterpart to `agent()` — *LLM for language, Java for logic*.
 - **Live observability** *(new in 2.1)* — `.withEventListener(...)` streams an `EasyAIEvent` for every moment of an operation (started → tool call → result → finished). Transport-agnostic: log it, meter it, or push it to a live UI. See below.
 - **CDI integration** — assistants are injectable with `@Inject`. Tool beans are auto-wired via `tools = {...}` on the annotation.
 - **Global config + per-call override** — set API key once with `EasyAI.configure()`, override per assistant if needed
@@ -176,7 +193,7 @@ em.persist(inv);   // no AI from here on — it's just a typed object your code 
 
 ### Live observability (new in 2.1)
 
-EasyAI normally works silently and hands you a final answer. Add **one method** — `.withEventListener(listener)` — and it will instead *narrate itself* as it runs: an `EasyAIEvent` for "I started", "I'm calling tool X", "tool X returned", "I'm on document 7 of 200", "I finished". It works on `EasyAI.chat()`, `EasyAI.agent()`, `EasyAI.indexer()`, and `EasyAI.extract()`.
+EasyAI normally works silently and hands you a final answer. Add **one method** — `.withEventListener(listener)` — and it will instead *narrate itself* as it runs: an `EasyAIEvent` for "I started", "I'm calling tool X", "tool X returned", "I'm on document 7 of 200", "I finished". It works on every capability — `EasyAI.chat()`, `EasyAI.assistant()`, `EasyAI.agent()`, `EasyAI.flow()`, `EasyAI.indexer()`, and `EasyAI.extract()`.
 
 ```java
 EasyAgent agent = EasyAI.agent()
@@ -200,6 +217,26 @@ For the full **"wow"** — every chat turn and agent tool call rendered live in 
 
 ---
 
+## One chat window for your whole app
+
+A common first question: *"there are six capabilities — does my app need six chat boxes?"* **No.** A real app has **one** chat window (the template's AI panel); the demo shows each capability in its own panel only because it's a **gallery**, not a blueprint.
+
+You usually route nothing yourself — the **model** does it, inside a single assistant. `EasyAI.assistant()` unifies chat + tools + RAG + ambient context behind one `ask()`:
+
+```java
+AppAssistant a = EasyAI.assistant(AppAssistant.class)
+    .withTools(orderService, inventoryService)   // it can ACT
+    .withRAG(policyDocs)                          // it can CITE
+    .withActivityContext(ctx)                     // it resolves "this" / "what am I looking at"
+    .build();
+
+String reply = a.ask(userMessage);   // one call — the model decides: answer, call a tool, or use RAG
+```
+
+`extract()` and `flow()` are triggered by your app **code** (an upload, a button), not chat turns — though the assistant can call a `flow()` as one of its tools. An explicit **orchestrator** is optional: reach for a thin intent-router only when you deliberately keep several *distinct* specialized backends. Most apps never need one. *(Full walkthrough in the EasyAI guide, chapter "One chat window for your whole app".)*
+
+---
+
 ## Why Not Spring AI?
 
 If you are building on Jakarta EE, Spring AI is simply the wrong tool — it requires Spring Boot, Spring context, and Spring beans throughout your application. EasyAI is designed for the Jakarta EE runtime you already have.
@@ -207,7 +244,7 @@ If you are building on Jakarta EE, Spring AI is simply the wrong tool — it req
 | | EasyAI | Spring AI |
 |---|---|---|
 | **Target runtime** | Jakarta EE — CDI, EJB, GlassFish, WildFly, Payara | Spring Boot / Spring context |
-| **Tool registration** | Zero annotations — pass any POJO or EJB, all public methods become tools | `@Tool` on each method, or a per-method `MethodToolCallback` |
+| **Tool registration** | Opt-in — mark methods with `@EasyTool` and pass any POJO or EJB to `.withTools()`; only annotated methods are callable | `@Tool` on each method, or a per-method `MethodToolCallback` |
 | **EJB bean as tool** | Built-in — `@Stateless`, `@Stateful`, `@Singleton` work as-is, container services preserved | Not supported |
 | **AI config** | Single `easyai.properties` file + `EasyAI.configure()` | `application.properties` + Spring bean wiring |
 | **RAG from byte[]** | `DocumentSource.of("name.pdf", bytes)` — one line that parses, splits, and embeds | `TikaDocumentReader(ByteArrayResource)` exists, but you assemble the reader → splitter → embedding → store pipeline yourself |
@@ -219,6 +256,7 @@ If you are building on Jakarta EE, Spring AI is simply the wrong tool — it req
 | **Agent safety limit** | `withMaxSteps(n)` — hard cap on tool calls, returns a final answer when reached | No built-in cap on automatic tool-calling — needs a custom advisor or a manual loop |
 | **Agent execution trace** | `withStepListener(step -> ...)` — typed callback with tool name, args, and result per step | Via custom advisors or Micrometer observation — no typed per-step callback out of the box |
 | **Agent planning prompt** | `withPlanningPrompt(true)` — instructs the model to plan before acting | Write your own system prompt — no built-in toggle |
+| **Deterministic pipeline** | `EasyAI.flow()` — named steps in a fixed order *you* author, LLM only at declared edges; typed context, unit-testable, same order every run | No first-class equivalent — hand-write the orchestration, or let the model drive tool calls (non-deterministic) |
 
 <sub>Comparison reflects Spring AI 2.0.0-M8 (May 2026). Spring AI is a capable, broad framework; the point here is fit for the **Jakarta EE** runtime and the amount of wiring each task takes — not that Spring AI can't do these things. The tool-call cap gap is tracked upstream in [spring-ai#3333](https://github.com/spring-projects/spring-ai/issues/3333).</sub>
 
@@ -247,7 +285,26 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>3.0.1</version>
+    <version>3.1.0</version>
+</dependency>
+```
+
+**Optional RAG & Milvus dependencies.** As of **3.1.0**, the RAG and Milvus integrations
+(`langchain4j-easy-rag`, `langchain4j-milvus`) are marked `optional`, so they no longer bloat your
+WAR by default. A chat- or tools-only app needs nothing extra. They are loaded lazily (only when you
+call the RAG/Milvus features), so a WAR that never uses them never loads them. **If** you use
+`withRAG(...)`, `withMilvus(...)` or `extract().from(document)`, add them back explicitly:
+
+```xml
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-easy-rag</artifactId>
+    <version>1.16.3</version>
+</dependency>
+<dependency>
+    <groupId>dev.langchain4j</groupId>
+    <artifactId>langchain4j-milvus</artifactId>   <!-- only if you use withMilvus(...) -->
+    <version>1.16.3</version>
 </dependency>
 ```
 

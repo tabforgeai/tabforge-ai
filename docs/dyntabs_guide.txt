@@ -636,6 +636,283 @@
 
 
 ================================================================================
+  USE CASE 10: Refreshing the UI after an AI tool changes data
+================================================================================
+
+  This use case matters when your app has an AI panel whose agent can call TOOLS
+  that CHANGE data (cancel an order, approve an invoice, ship a parcel). Even if
+  you do not use AI, the same refresh pattern applies to any server-side change
+  made outside the normal JSF request.
+
+  --- The problem, in plain terms ---
+
+  The user opens the Orders tab (a table from the database) and types into the AI
+  panel: "cancel order ORD-002". The agent calls a tool that updates the order in
+  the database. The order is now "Cancelled" on the server -- but the table on
+  screen still says "Processing". The UI is stale.
+
+  Why: the panel's message arrives over a plain REST call (the AI panel POSTs to
+  your chat endpoint), OUTSIDE the JSF request lifecycle. There is no JSF ajax
+  response to repaint the browser. The server data changed; the DOM never heard
+  about it.
+
+  --- The agent only has the tools of the CURRENT tab ---
+
+  A single global AI panel is normally TAB-AWARE: which tools it offers the agent
+  depends on which tab the user is on. On the Orders tab it exposes the order
+  tools, so "cancel order ORD-002" works. On Home it exposes none, so the same
+  request is politely declined ("open the Orders tab to manage orders"). This is
+  least privilege per surface -- the agent can only act where it makes sense.
+
+  Conceptually you keep a small map "tab -> tools" and build the assistant with
+  just that tab's tools:
+
+    Object[] toolsFor(String tabType) {
+        if ("Orders".equals(tabType)) return new Object[]{ orderService };
+        return new Object[0];   // other tabs: answer/navigate only, no actions
+    }
+
+  The DynTabs part you rely on: the active tab is knowable SERVER-SIDE even on a
+  REST call that has no FacesContext. Every tab declared with
+  @DynTab(trackActivity = true) records a NAVIGATION activity event carrying its
+  uniqueIdentifier, so "which tab is the user on now?" is just the most recent
+  such event. (Building the assistant, reading the active tab, and keeping ONE
+  shared conversation across tab switches is the AI side -- see easyai_guide.txt,
+  "Tab-aware tools".)
+
+  --- What the developer does to refresh the UI ---
+
+  Two layers, because two different things are stale: the server-side bean models,
+  and the browser DOM.
+
+  LAYER 1 -- refresh the data server-side (every open tab).
+
+  After the tool changes the data, tell the tabs to re-read it. This is exactly
+  the inter-tab messaging from USE CASE 6: fire an application event; each tab
+  reacts in onApplicationMessage() and reloads its model. DynTabManager delivers
+  it to EVERY open tab in its correct @TabScoped scope -- including background
+  tabs the user is not currently looking at.
+
+    // In the tab bean that owns the data (e.g. OrdersBean):
+    @Override
+    protected void onApplicationMessage(String senderId, Object payload) {
+        if (payload instanceof OrderChangedPayload changed) {
+            this.orders = orderService.reload();   // re-read from the database
+        }
+    }
+
+  Firing the event depends on where your tool runs:
+
+    // (a) Tool runs INSIDE a JSF request (e.g. a per-tab assistant invoked from a
+    //     backing-bean action): a tab bean can broadcast directly.
+    sendMessageToAllAppModules(new OrderChangedPayload(orderId));
+
+    // (b) Tool runs OUTSIDE JSF (a REST-backed global panel): fire via the manager.
+    DynTabManager.getCurrentInstance()
+        .fireApplicationEvent(
+            new ApplicationCDIEvent("OrderChanged", "AiPanel", null, orderId));
+    // null target = broadcast to all tabs.
+
+  LAYER 2 -- repaint the browser.
+
+  Layer 1 refreshed the server model, but the browser still shows the old DOM.
+  Because the tool ran outside JSF, there is no ajax response to carry an update.
+  You need a server -> browser PUSH to trigger the repaint.
+
+  The clean way: reuse the same SSE channel that already feeds your Activity
+  panel. When the tool finishes, push a small "data-changed" signal. A tiny JS
+  listener reacts by invoking a PrimeFaces remoteCommand that does a JSF update on
+  the active tab's region:
+
+    <p:remoteCommand name="refreshActiveTab" update="mainForm:mainTabView" />
+
+    // in your SSE onmessage handler:
+    if (msg.type === 'data-changed') refreshActiveTab();
+
+  Why only the ACTIVE tab needs the browser push: DynTabs renders the tab area as
+  a non-dynamic PrimeFaces tabView, so all open tabs are already in the DOM
+  (inactive ones are just hidden). The visible tab needs the ajax repaint now;
+  background tabs already have fresh models from Layer 1 and repaint naturally
+  when the user selects them (onThisTabSelected / re-render on tab change).
+
+  --- The whole flow at a glance ---
+
+    AI tool changes data
+      -> fireApplicationEvent (broadcast)     [Layer 1: server models, all tabs]
+      -> onApplicationMessage() re-reads data
+      -> SSE "data-changed" push              [Layer 2: browser repaint]
+      -> remoteCommand update on active tab
+      -> background tabs repaint on next select
+
+  Note the separation of concerns: the AI library stays transport-agnostic -- it
+  knows nothing about tabs or SSE. The tool changes data; YOUR application wires
+  the event and the push. That boundary is deliberate, and it is what lets the
+  same assistant sit behind any UI.
+
+
+================================================================================
+  USE CASE 11: Proactive suggestions (when the app speaks first)
+================================================================================
+
+  Everything so far is REACTIVE: the assistant waits for the user to type. This
+  use case makes it PRO-ACTIVE -- the app notices a pattern in what the user is
+  doing and, unprompted, offers a useful next step as a small, dismissible chip in
+  the AI panel. Example: the user opens two orders that happen to belong to the
+  same customer, and a chip appears -- "Looking at several Acme orders -- want a
+  quick account summary?" -- with [Yes, please] / [Not now].
+
+  --- Before you start (prerequisites) ---
+
+  This use case BUILDS ON features set up earlier; it is not a from-scratch
+  chapter. Wherever you are starting from, make sure these three are in place --
+  each line says where it comes from and whether the starter already ships it:
+
+    1. An AI panel wired to your backend over SSE (the chat + Activity panel that
+       AgentEvents are pushed to). The tabforge-ai-starter SHIPS THIS already
+       (api.AiEventChannel + AiStreamResource + AiChatResource + the template
+       wiring). If you built your own panel, that SSE channel is the prerequisite.
+
+    2. Ambient Activity RECORDING turned on for the actions you want to react to
+       -- this is the SENSOR your rule reads. The starter does NOT ship this (its
+       chat uses plain session memory), so you add it for your domain: annotate the
+       tab with @DynTab(trackActivity = true) and the user actions with
+       @ActivityTracked, exactly as the Orders demo does. See the "Ambient Activity
+       Memory" material and USE CASE 9.
+
+    3. A chat assistant behind the panel that can CARRY OUT an accepted suggestion
+       (Step 6 injects the suggestion's prompt into that chat). Ideally it is
+       TAB-AWARE so it only acts where it makes sense. The starter ships a simple
+       session-wide chat; the tab-aware version is USE CASE 10 here plus
+       easyai_guide.txt, "Tab-aware tools".
+
+  In short: the starter gives you (1); you add (2) and (3) for your own domain, and
+  this use case adds the proactive layer on top. The demo (OrdersBean, OrderCatalog,
+  SameCustomerOrdersRule, SuggestionAdvisor, ...) is the full worked reference.
+
+  This is a trust minefield, so the design has ONE firm rule:
+
+      A deterministic Java rule decides IF and WHAT to suggest.
+      The LLM is used ONLY to phrase the chosen suggestion into a sentence.
+
+  Never let a model scan the activity log and free-associate about what to
+  suggest -- that is slow, costly, noisy, and an injection surface. Detection is
+  ordinary, testable code; the model just writes the one line the user reads.
+
+  --- The pipeline: SENSE -> DECIDE -> PHRASE -> PUSH ---
+
+  You already own three of the four stages; only the rule is new.
+
+    SENSE   the activity timeline you record once Ambient Activity is enabled
+            (@DynTab(trackActivity=true), @ActivityTracked) -- prerequisite 2 above.
+    DECIDE  a deterministic rule over the recent window.            <-- you write this
+    PHRASE  a tiny EasyAI assistant turns the rule's facts into a sentence.
+    PUSH    the SAME SSE channel that feeds the Activity panel, used in reverse:
+            the server pushes a {type:"suggestion"} event; the browser is already
+            listening, so it renders a chip. "The server speaks first."
+
+  --- Step by step, what the developer does ---
+
+  STEP 1 -- Write a rule (deterministic; this is the heart).
+
+  Implement one small interface. Make it a CDI bean; the advisor (Step 2) injects
+  every implementation, so "add proactivity" == "add a bean".
+
+    public interface SuggestionRule {
+        Optional<Suggestion> evaluate(List<UserActivityEvent> recent);
+    }
+
+  The rule is PURE and CHEAP (it runs synchronously on the click thread), and
+  CONSERVATIVE (return empty unless the pattern is clear -- a good proactive
+  feature is silent almost always). When it fires it returns a Suggestion carrying
+  four things, so the rest of the machinery stays domain-agnostic:
+
+    - actionId         a stable machine name  (e.g. "summarize-customer")
+    - key              a cooldown/mute key    (e.g. actionId + ":" + customer)
+    - promptForAccept  the chat prompt to run verbatim if the user accepts
+    - phrasingBrief    facts-only briefing the LLM will turn into one sentence
+
+  Note the sentence the user reads is NOT in the rule -- it does not exist yet.
+  Demo rule: services/SameCustomerOrdersRule.java groups recently-viewed orders by
+  customer (via a shared services/OrderCatalog) and fires on >=2 for one customer.
+
+  STEP 2 -- Let an advisor run rules, phrase hits, and push.
+
+  A single @ApplicationScoped advisor (demo: services/SuggestionAdvisor.java) is
+  the engine. It exposes a trigger method you call from wherever an activity was
+  just recorded, and it enforces the timing discipline:
+
+    - DETECT synchronously (rules are cheap) -- must never block the user's click,
+      and must never throw (a proactive nicety cannot break the action).
+    - On a hit, reserve the cooldown immediately, then PHRASE + PUSH on a
+      background thread (a ManagedExecutorService), because the LLM call is slow.
+    - At most ONE suggestion per trigger; a cooldown per key stops repeats; a
+      dismiss mutes that key for much longer.
+
+  STEP 3 -- Trigger it from a tracked action.
+
+  Call the advisor right after the activity is recorded. In the demo, opening an
+  order already records a "viewed order" event, so OrdersBean.openOrder() adds one
+  line:
+
+    this.orderDetail = orderActivityService.viewOrder(order.getId());  // records
+    suggestionAdvisor.onOrderViewed(activityRecorder.currentSessionId()); // poke
+
+  (Event-driven, not polling. The event is recorded before openOrder returns, so
+  the rule sees it.)
+
+  STEP 4 -- Push over the SSE channel as a "suggestion" event.
+
+  Reuse the channel that already feeds the Activity panel; add one event type. The
+  demo's AgentEvent gains a suggestion(actionId, text, prompt, key) factory, and
+  the advisor emits it via the existing AiEventChannel.emit(sessionId, event).
+
+  STEP 5 -- Render the chip, and keep it out of the timeline.
+
+  The panel's Activity timeline logs every SSE event; teach it to ignore the new
+  type (one line in layout.js, alongside how 'assistant_message' is skipped):
+
+    if (event.type === 'assistant_message' || event.type === 'suggestion') return;
+
+  Then a small handler draws the chip (demo: template.xhtml, the 'suggestion'
+  handler): render evt.text with textContent (never innerHTML -- it is model
+  output), add [Yes, please] / [Not now], and open the panel so the offer is seen.
+
+  STEP 6 -- Carry out the user's choice (reuse, no new path).
+
+  This is the elegant part: accepting does NOT need a new execution route.
+
+    ACCEPT  -> put evt.prompt into the normal chat input and send it. It becomes
+               an ordinary chat turn for your existing (tab-aware) assistant and
+               its tools -- see easyai_guide.txt, "Tab-aware tools". Then POST the
+               decision so the advisor restarts the cooldown.
+    DISMISS -> POST the decision; the advisor mutes that key for a while.
+
+  The demo posts decisions to a tiny endpoint (api/SuggestionResource.java) that
+  just calls advisor.accepted(key) / advisor.dismissed(key).
+
+  --- The whole flow at a glance ---
+
+    user views 2nd Acme order
+      -> viewOrder() records activity      [SENSE]
+      -> advisor.onOrderViewed(session)    [DECIDE, sync: rule fires]
+      -> executor: phraser writes sentence [PHRASE, async]
+      -> AiEventChannel.emit(suggestion)   [PUSH over open SSE]
+      -> browser renders a chip
+      -> [Yes, please] injects prompt into the chat -> existing assistant answers
+      -> [Not now] mutes this suggestion for a while
+
+  --- Where the boundary sits ---
+
+  As always, the AI library stays transport- and domain-agnostic: it provides the
+  activity timeline (the sensor) and the assistant (the phraser). YOUR application
+  supplies the concrete RULES and wires the SSE push and the chip. That is why v0
+  needs no library change at all -- it is built entirely from features you already
+  have, plus a rule and a little glue. (A future library release may add a general
+  "activity listener + advisor" scaffold so the plumbing is provided too; the rule
+  will always be yours, because only your app knows what is worth suggesting.)
+
+
+================================================================================
   ANNOTATIONS REFERENCE
 ================================================================================
 

@@ -1,7 +1,7 @@
 # TabForge AI — LLM Context File
 # Use this file to understand the TabForge AI library API when helping developers write code.
 # GitHub: https://github.com/tabforgeai/tabforge-ai
-# Maven: io.github.tabforgeai:tabforge-ai:3.0.1
+# Maven: io.github.tabforgeai:tabforge-ai:3.1.0
 
 ## What is TabForge AI?
 
@@ -20,9 +20,10 @@ Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>3.0.1</version>
+    <version>3.1.0</version>
 </dependency>
 ```
+As of 3.1.0, `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` (not in your WAR by default; a chat/tools app needs neither, and they load lazily). If you use `withRAG(...)`, `withMilvus(...)` or `extract().from(document)`, add both to your pom explicitly (version 1.16.3). See section 7.
 
 ### Configuration — src/main/resources/easyai.properties
 ```properties
@@ -204,8 +205,61 @@ When a tool throws an exception, result contains: `TOOL_ERROR | tool=X | error=Y
 **When to use agent vs assistant:**
 - Single Q&A with tool calls → `EasyAI.assistant()`
 - Multi-step task, conditional branching, autonomous execution → `EasyAI.agent()`
+- Known business process, fixed order, correctness-critical (money/state) → `EasyAI.flow()` (see 6)
 
-### 6. Persistent RAG with Milvus — EasyAI.indexer() + .withMilvus()
+### 6. EasyAI.flow() — Deterministic Step Pipeline (LLM only at the edges)
+
+A developer-authored pipeline of NAMED steps run in a FIXED order you declare in Java. The LLM is called only at the edges you choose (typically "understand" the request, "summarize" the outcome); the steps in between are plain Java. Motto: **LLM for language, Java for logic.** It is the counterpart to `agent()`: use `agent()` when the path is genuinely unknown (the LLM decides the order); use `flow()` for a KNOWN business process where the order is a domain invariant (check stock → pay → create order → ship) and must be the same every time.
+
+```java
+FlowContext out = EasyAI.flow()
+    .step("understand", ctx -> EasyAI.extract(OrderRequest.class).from(ctx.inputText())) // LLM edge
+    .step("checkStock", ctx -> inventory.checkStock(ctx.get("understand", OrderRequest.class)))
+    .step("pay",        ctx -> payment.charge(ctx.get("understand", OrderRequest.class)))
+    .step("createOrder",ctx -> orders.create(ctx.get("understand", OrderRequest.class)))
+    .step("ship",       ctx -> shipping.schedule(ctx.get("createOrder", Order.class)))
+    .step("summarize",  ctx -> EasyAI.chat().build()
+                                  .send("Tell the user what happened:\n" + ctx.trail()))    // LLM edge
+    .withEventListener(activityBridge)   // same live stream as agent(), under Source.FLOW
+    .build()
+    .run("Order 3 blue watches, ship home.");
+
+String reply = (String) out.result();   // the last step's output ("summarize")
+```
+
+`FlowContext` — the immutable snapshot passed to every step:
+- `input()` / `input(Class)` / `inputText()` — the original `run(...)` argument
+- `get(name, Class)` — a prior step's result, typed (throws if missing or wrong type)
+- `has(name)`, `result()` (last step's value), `results()`, `trail()` (`name → value` lines; feed to a summarize step)
+
+Semantics:
+- Steps run strictly in registration order; each step's return value is stored under its step name for later steps.
+- A step that throws aborts the flow with `FlowException` (`stepName()` names the failing step; the original exception is the cause).
+- The flow itself has NO `ChatModel` dependency — the LLM lives only inside the steps you write (provider-agnostic by construction).
+- Emits the same `EasyAIEvent` stream as `agent()` under `Source.FLOW` (STARTED → per-step STEP_STARTED/STEP → FINISHED/ERROR), so an Activity panel renders it with zero new wiring.
+
+Why `flow()` over an agent loop for a known process: deterministic order (the money/state path is identical every run), unit-testable (mock the LLM at the edges and assert invariants like "stock is checked before pay"; each step is a pure function of its `FlowContext`), injection-safe (the model can't reorder or invent steps), and cheaper (2 LLM calls at the edges vs many in a loop).
+
+Conditional & fallback logic (declared, not searched — no planner):
+- Plain Java `if` INSIDE a step handles a trivial in-step choice — no special API needed.
+- `.stepIf(name, cond, fn)` — runs the step only if `cond.test(ctx)` is true; otherwise it is SKIPPED (stores no result, `has(name)` stays false; emits a WARNING "skipped" row). Use when the branch deserves to be a first-class, named, skippable step.
+- `.step(name, primary).orElse(altFn).orElse(altFn2)` — attaches fallbacks to the LAST step: if the primary throws, alternatives are tried in order until one succeeds (whichever succeeds stores under the step name); if all throw, the flow aborts with `FlowException`. This is GOAP's "try another way" as a DECLARED alternative, not a discovered one.
+
+```java
+.step("checkStock", ctx -> inventory.checkStock(ctx.get("understand", OrderRequest.class)))
+.stepIf("reserve",
+        ctx -> !ctx.get("checkStock", Boolean.class),                    // only when NOT in stock
+        ctx -> inventory.getFromWarehouse(ctx.get("understand", OrderRequest.class)))
+.step("pay", ctx -> payment.charge(ctx.get("understand", OrderRequest.class)))
+    .orElse(ctx -> payment.chargeBackupGateway(ctx.get("understand", OrderRequest.class)))  // if primary throws
+```
+
+**Three tiers — when to use which:**
+- Freeform / one-shot Q&A → `EasyAI.chat()` / `EasyAI.assistant()`
+- Open-ended task, path unknown, LLM plans the order → `EasyAI.agent()`
+- Known business process, fixed order, correctness > flexibility → `EasyAI.flow()`
+
+### 7. Persistent RAG with Milvus — EasyAI.indexer() + .withMilvus()
 
 Index documents ONCE into a persistent vector database; assistants query it forever (survives restarts, shared across sessions/server nodes). Use case 4 RAG is in-memory and ephemeral; Milvus is durable and scales to thousands of docs.
 
@@ -224,7 +278,9 @@ bot.ask("How many vacation days do employees get?");
 
 `.withMilvus(...)` takes precedence over `.withRAG(...)` / `@EasyRAG`. Connection can come from `easyai.milvus.*` properties via no-arg `.toMilvus()` / `.withMilvus()`. The dimension (default 384) must match the embedding model. Tuning: `.withMilvus(MilvusConfig.of(...), maxResults, minScore)`.
 
-### 7. Structured Extraction — EasyAI.extract()
+**Dependencies (3.1.0+):** `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` in the tabforge-ai pom, so add them to your own WAR to use RAG/Milvus/`extract().from(document)` (version 1.16.3). They load lazily, so a chat/tools-only WAR that never calls these never loads the jars.
+
+### 8. Structured Extraction — EasyAI.extract()
 
 Turn unstructured text or a document into a TYPED Java record/POJO — the bridge from AI text into your normal typed-Java world.
 
@@ -244,7 +300,7 @@ Supports records and POJOs, nested objects, lists, enums, and java.time types. O
 - `.validate()` — run Jakarta Bean Validation; throws `ExtractionException` on a violation
 - per-call config overrides (`.withModel`, `.withApiKey`, ...); extraction defaults to temperature 0.0
 
-### 8. Live Event Stream — observe the AI as it works
+### 9. Live Event Stream — observe the AI as it works
 
 Get a live callback for each step the AI takes (tool call, result, agent start/finish), e.g. to drive a real-time UI activity panel. The library stays transport-agnostic — you decide where events go (SSE, WebSocket, log).
 
@@ -255,9 +311,9 @@ EasyAgent agent = EasyAI.agent()
     .build();
 ```
 
-Available on `chat()`, `assistant()`, and `agent()` via `.withEventListener(...)`. The agent additionally offers `.withStepListener(step -> ...)` for a typed `AgentStep` (stepNumber/toolName/arguments/result).
+Available on every capability — `chat()`, `assistant()`, `agent()`, `flow()`, `indexer()`, and `extract()` — via `.withEventListener(...)`. (For `assistant()` the stream is the per-tool-call slice: STEP_STARTED/STEP per tool, since the assistant method is invoked directly by your code.) The agent additionally offers `.withStepListener(step -> ...)` for a typed `AgentStep` (stepNumber/toolName/arguments/result).
 
-### 9. Ambient Activity Memory — .withActivityContext()
+### 10. Ambient Activity Memory — .withActivityContext()
 
 The assistant resolves "this"/"that" from what the user JUST DID in the UI, with no typed context. Mirror image of the live event stream: UI → AI instead of AI → UI.
 
@@ -288,6 +344,27 @@ bot.ask("cancel this");              // resolves to the order just viewed
 - `forSession(s).forTab(t)` → per-tab deixis ("cancel this order"). Omit `forTab` → session-wide orientation ("what tab am I on?").
 - In-memory, per-session, ephemeral by default (`ActivityStore` SPI, `InMemoryActivityStore` default). Also `.window(Duration)`, `.limit(n)`, `.renderer(...)`.
 - Capture is opt-in: nothing is recorded without `@DynTab(trackActivity=true)` or `@ActivityTracked`.
+
+### 11. One chat window for your whole app (architecture)
+
+A real app needs ONE chat surface (the pf-modern-template AI panel), not one per capability — the demo's several panels are an isolated-capability GALLERY, not a blueprint. You usually route NOTHING yourself: back the single panel with ONE `EasyAI.assistant()` that has tools + RAG + activity context; the model decides per message whether to answer directly, call a tool, or use RAG.
+
+```java
+@EasyAIAssistant(systemMessage = "You are the app assistant; use tools when asked.")
+public interface AppAssistant { String ask(String message); }
+
+AppAssistant a = EasyAI.assistant(AppAssistant.class)
+    .withTools(orderService, inventoryService)   // it can ACT
+    .withRAG(policyDocs)                          // it can CITE
+    .withActivityContext(ctx)                     // it resolves "this" / "what am I looking at"
+    .build();
+String reply = a.ask(userMessage);               // one call; the model routes internally
+```
+
+Wiring (demo): template panel -> POST /api/ai/chat -> @SessionScoped bean (GlobalAiAssistantBean) -> assistant.ask(...) -> reply streamed back to the panel.
+- "One chat window" = the CONVERSATIONAL surface is single, not that every feature is a chat message. `extract()` and `flow()` are triggered by app CODE (upload / button), not chat turns — though the assistant can call a flow as one of its tools.
+- Orchestrator/router = OPTIONAL, only when you deliberately keep multiple DISTINCT specialized backends (a flow + a separate RAG bot + general chat); then a thin intent-classifier dispatches to the right one. Most apps never need it.
+- One line: one window, one assistant (tools + RAG + context), the model routes. N windows only in a gallery.
 
 ---
 
@@ -375,7 +452,7 @@ public class AgentBean {
 | `easyai.base-url` | Custom endpoint | (provider default) |
 | `easyai.temperature` | 0.0–1.0 | (provider default) |
 | `easyai.max-tokens` | Max response length | (provider default) |
-| `easyai.milvus.host` | Milvus host (use case 6) | `localhost` |
+| `easyai.milvus.host` | Milvus host (use case 7) | `localhost` |
 | `easyai.milvus.port` | Milvus port | `19530` |
 | `easyai.milvus.collection` | Collection name | (required) |
 | `easyai.milvus.dimension` | Embedding dimension | `384` |
@@ -452,5 +529,5 @@ public class OrdersBean extends BaseDyntabCdiBean {
 - `sendMessageToAllAppModules(payload)` / `onApplicationMessage()` — inter-tab messaging
 - `closeAndReturnValueToCaller(value)` — child tab returns value to parent
 - `@DynTab(securedResource=true, allowedRoles={"ADMIN"})` — declarative security
-- `@DynTab(trackActivity=true)` — records tab open/select onto the ambient activity timeline (feeds EasyAI Ambient Activity Memory, use case 9)
+- `@DynTab(trackActivity=true)` — records tab open/select onto the ambient activity timeline (feeds EasyAI Ambient Activity Memory, use case 10)
 - Open tabs programmatically with parameters at runtime

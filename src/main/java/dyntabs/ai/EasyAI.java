@@ -100,6 +100,8 @@ import com.google.gson.JsonParser;
  * @see AssistantBuilder
  * @see AgentBuilder
  * @see EasyAgent
+ * @see FlowBuilder
+ * @see Flow
  * @see EasyAIConfig
  * @see dyntabs.ai.annotation.EasyAIAssistant
  * @see dyntabs.ai.annotation.EasyRAG
@@ -185,6 +187,42 @@ public final class EasyAI {
      */
     public static AgentBuilder agent() {
         return new AgentBuilder();
+    }
+
+    /**
+     * Starts building a {@link Flow}: a deterministic, developer-authored pipeline of named steps
+     * where <em>you</em> fix the order in plain Java and the LLM is called only at the edges you
+     * declare (typically "understand the request" first, "summarize the outcome" last).
+     *
+     * <p>This is the deliberate counterpart to {@link #agent()}. An agent lets the model decide
+     * which service to call next — right when the path is genuinely unknown, but non-deterministic
+     * and hard to test. A flow is for a <b>known business process</b> (check stock → take payment →
+     * create order → ship): one correct order, the same every time, each step a plain, testable
+     * function. The motto: <em>LLM for language, Java for logic.</em></p>
+     *
+     * <pre>{@code
+     * FlowContext out = EasyAI.flow()
+     *     .step("understand", ctx -> EasyAI.extract(OrderRequest.class).from(ctx.inputText())) // LLM
+     *     .step("checkStock", ctx -> inventory.checkStock(ctx.get("understand", OrderRequest.class)))
+     *     .step("pay",        ctx -> payment.charge(ctx.get("understand", OrderRequest.class)))
+     *     .step("createOrder",ctx -> orders.create(ctx.get("understand", OrderRequest.class)))
+     *     .step("ship",       ctx -> shipping.schedule(ctx.get("createOrder", Order.class)))
+     *     .step("summarize",  ctx -> EasyAI.chat().build()
+     *                                    .send("Tell the user what happened:\n" + ctx.trail()))   // LLM
+     *     .build()
+     *     .run("Order 3 blue watches, ship home.");
+     *
+     * String reply = (String) out.result();   // the "summarize" step's output
+     * }</pre>
+     *
+     * @return a new {@link FlowBuilder}
+     * @see FlowBuilder
+     * @see Flow
+     * @see dyntabs.ai.flow.FlowContext
+     * @see dyntabs.ai.flow.FlowStep
+     */
+    public static FlowBuilder flow() {
+        return new FlowBuilder();
     }
 
     /**

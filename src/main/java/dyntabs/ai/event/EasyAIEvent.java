@@ -56,6 +56,8 @@ public final class EasyAIEvent {
         RAG,
         /** {@code EasyAI.agent()} — an autonomous multi-step agent. */
         AGENT,
+        /** {@code EasyAI.flow()} — a developer-authored, deterministic step pipeline. */
+        FLOW,
         /** {@code EasyAI.indexer()} — document ingestion into a vector store. */
         INDEXER,
         /** {@code EasyAI.extract(...)} — structured extraction of a typed object. */

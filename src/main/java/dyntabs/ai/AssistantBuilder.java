@@ -17,6 +17,10 @@ import dyntabs.ai.annotation.EasyAIAssistant;
 import dyntabs.ai.annotation.EasyRAG;
 import dyntabs.ai.assistant.ToolIntrospector;
 import dyntabs.ai.assistant.ToolMethod;
+import dyntabs.ai.event.EasyAIEvent.Source;
+import dyntabs.ai.event.EasyAIEvent.Status;
+import dyntabs.ai.event.EasyAIListener;
+import dyntabs.ai.event.EventEmitter;
 import dyntabs.ai.rag.DocumentSource;
 import dyntabs.ai.rag.MilvusConfig;
 import dyntabs.ai.rag.MilvusEngine;
@@ -129,10 +133,12 @@ public class AssistantBuilder<T> {
     // Kept separate from toolObjects so opt-in and expose-all never cross-contaminate.
     private final List<Object> allPublicToolObjects = new ArrayList<>();
     private int memorySize = 20;
+    private ChatMemory externalChatMemory;
     private String systemMessage;
     private final EasyAIConfig.Builder configOverrides = EasyAIConfig.builder();
     private ChatModel externalModel;
     private ActivityContext activityContext;
+    private EasyAIListener eventListener;
 
     // Programmatic RAG config (overrides @EasyRAG annotation if set)
     private String[] ragSources;
@@ -203,6 +209,46 @@ public class AssistantBuilder<T> {
 
     public AssistantBuilder<T> withMemory(int maxMessages) {
         this.memorySize = maxMessages;
+        return this;
+    }
+
+    /**
+     * Uses a {@link ChatMemory} instance <b>you own and keep</b>, instead of letting the builder
+     * create a fresh one sized by {@link #withMemory(int)}.
+     *
+     * <h2>Why this exists</h2>
+     * <p>{@link #withMemory(int)} says "make me a memory of this size" — a brand-new, empty
+     * conversation buffer is created inside every {@link #build()}. That is exactly what you
+     * <em>don't</em> want when you have to rebuild the assistant but keep the conversation going.
+     * The motivating case: an assistant whose <em>tool set changes with context</em> (e.g. a global
+     * panel that exposes order tools only while the user is on the Orders tab). Tools are fixed at
+     * {@code build()} time, so changing them means rebuilding — and with {@code withMemory(int)} each
+     * rebuild would wipe the chat history. Hand the builder a memory you hold onto instead, pass the
+     * <em>same</em> instance into every rebuild, and the conversation survives untouched.</p>
+     *
+     * <p>It is also the seam for a <b>custom or persistent</b> memory: supply a
+     * {@code MessageWindowChatMemory} with your own store, or any other {@link ChatMemory}
+     * implementation, and the assistant will read and append to it.</p>
+     *
+     * <p><b>Precedence:</b> when set, this wins over {@link #withMemory(int)} — the size hint is
+     * ignored because you are supplying the whole memory. Pass {@code null} to fall back to the
+     * size-based default.</p>
+     *
+     * <p><b>Familiar analogy:</b> {@code withMemory(int)} is asking the office for a fresh, empty
+     * notebook each meeting; {@code withChatMemory(...)} is bringing your <em>own</em> notebook so
+     * the running notes carry over from one meeting to the next — even when the meeting room (the
+     * tool set) changes.</p>
+     *
+     * <p><b>Thread-safety:</b> a shared memory is shared mutable state. Reuse one instance only
+     * within a single logical conversation (e.g. one session bean), not across concurrent users.</p>
+     *
+     * @param chatMemory the memory to read from and append to; {@code null} restores the
+     *                   {@link #withMemory(int)} default
+     * @return this builder
+     * @see #withMemory(int)
+     */
+    public AssistantBuilder<T> withChatMemory(ChatMemory chatMemory) {
+        this.externalChatMemory = chatMemory;
         return this;
     }
 
@@ -452,16 +498,59 @@ public class AssistantBuilder<T> {
         return this;
     }
 
+    /**
+     * Registers a transport-agnostic {@link EasyAIListener} that receives a live stream of
+     * {@link dyntabs.ai.event.EasyAIEvent}s as the assistant calls your tools.
+     *
+     * <p>This is the same observability hook the other capabilities expose (see
+     * {@link AgentBuilder#withEventListener(EasyAIListener)} and
+     * {@link FlowBuilder#withEventListener(EasyAIListener)}). Because an assistant's method is invoked
+     * directly by your code (there is no wrapper for EasyAI to bracket), the stream here is the
+     * per-<b>tool-call</b> slice of the lifecycle: for each tool the model decides to call, a
+     * {@link dyntabs.ai.event.EasyAIEvent.Phase#STEP_STARTED} fires before it runs (a spinning row in a
+     * UI) and a {@link dyntabs.ai.event.EasyAIEvent.Phase#STEP} fires after, with
+     * {@link dyntabs.ai.event.EasyAIEvent.Status#SUCCESS} or
+     * {@link dyntabs.ai.event.EasyAIEvent.Status#ERROR}. Events are emitted under
+     * {@link dyntabs.ai.event.EasyAIEvent.Source#ASSISTANT}. An assistant with no tools emits nothing.</p>
+     *
+     * <p><b>Familiar analogy:</b> a live camera over the assistant's hands — you see each tool it
+     * reaches for and what came back, even though the final spoken answer arrives through the normal
+     * return value of your assistant method.</p>
+     *
+     * <pre>{@code
+     * SupportBot bot = EasyAI.assistant(SupportBot.class)
+     *     .withTools(orderService)
+     *     .withEventListener(e -> log.info("{}", e))   // tool_call → tool_result per tool
+     *     .build();
+     * }</pre>
+     *
+     * @param eventListener the listener to receive the assistant's tool-call event stream (may be {@code null})
+     * @return this builder
+     * @see dyntabs.ai.event.EasyAIEvent
+     * @see dyntabs.ai.event.EasyAIListener
+     */
+    public AssistantBuilder<T> withEventListener(EasyAIListener eventListener) {
+        this.eventListener = eventListener;
+        return this;
+    }
+
     public T build() {
         ChatModel model = externalModel != null
                 ? externalModel
                 : ModelFactory.create(effectiveConfig());
 
+        // Live event stream (no-op when no listener was registered).
+        EventEmitter emitter = new EventEmitter(Source.ASSISTANT, eventListener);
+
         AiServices<T> serviceBuilder = AiServices.builder(assistantInterface)
                 .chatModel(model);
 
-        // Memory
-        if (memorySize > 0) {
+        // Memory. A caller-supplied ChatMemory (withChatMemory) wins over the size-based default
+        // (withMemory) — that is how a rebuilt assistant keeps the same conversation: hand it the
+        // same memory instance each time instead of minting a fresh, empty one here.
+        if (externalChatMemory != null) {
+            serviceBuilder.chatMemory(externalChatMemory);
+        } else if (memorySize > 0) {
             ChatMemory memory = MessageWindowChatMemory.withMaxMessages(memorySize);
             serviceBuilder.chatMemory(memory);
         }
@@ -489,17 +578,29 @@ public class AssistantBuilder<T> {
 
             for (ToolMethod tm : toolMethods) {
                 toolMap.put(tm.specification(), (toolExecutionRequest, memoryId) -> {
+                    // Pre-step: announce the tool dispatch before it runs (spinner row in a UI).
+                    emitter.stepStarted(tm.specification().name(), toolExecutionRequest.arguments());
+
+                    String result;
+                    Status status;
                     try {
                         // Parse arguments from JSON
                         Object[] args = parseArguments(tm, toolExecutionRequest.arguments());
-                        Object result = tm.method().invoke(tm.targetObject(), args);
-                        return result != null ? result.toString() : "null";
+                        Object rawResult = tm.method().invoke(tm.targetObject(), args);
+                        result = rawResult != null ? rawResult.toString() : "null";
+                        status = Status.SUCCESS;
                     } catch (java.lang.reflect.InvocationTargetException e) {
                         Throwable cause = e.getCause() != null ? e.getCause() : e;
-                        return "Error executing tool: " + cause.getMessage();
+                        result = "Error executing tool: " + cause.getMessage();
+                        status = Status.ERROR;
                     } catch (Exception e) {
-                        return "Error executing tool: " + e.getMessage();
+                        result = "Error executing tool: " + e.getMessage();
+                        status = Status.ERROR;
                     }
+
+                    // Post-step: the tool returned — resolve the row to success or error.
+                    emitter.step(tm.specification().name(), result, status);
+                    return result;
                 });
             }
 

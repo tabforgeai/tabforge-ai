@@ -7,6 +7,7 @@ dyntabs.ai.assistant
 dyntabs.ai.cdi
 dyntabs.ai.event
 dyntabs.ai.extract
+dyntabs.ai.flow
 dyntabs.ai.rag
 dyntabs.annotation
 dyntabs.interfaces
