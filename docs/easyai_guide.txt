@@ -940,16 +940,21 @@
     <dependency>
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-easy-rag</artifactId>
-      <version>1.16.3</version>
+      <version>1.16.3-beta26</version>
     </dependency>
     <dependency>
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-milvus</artifactId>   <!-- only for withMilvus(...) -->
-      <version>1.16.3</version>
+      <version>1.16.3-beta26</version>
     </dependency>
 
+  On the version: easy-rag and milvus are langchain4j "beta" modules with their OWN
+  numbering, so it is 1.16.3-beta26 (NOT 1.16.3) -- the version the langchain4j-bom
+  1.16.3 that TabForge AI 3.1.0 builds on pins. If you prefer not to hard-code it,
+  import langchain4j-bom:1.16.3 into your <dependencyManagement> and omit <version>.
+
   (langchain4j and langchain4j-open-ai stay mandatory; only the RAG/Milvus jars moved
-  to optional. Demo and starter don't use RAG, so their WARs are unaffected.)
+  to optional. The demo adds easy-rag for its RAG tabs; the starter doesn't use RAG.)
 
   USE CASE 4 (RAG) loads and embeds your documents fresh every time you build an
   assistant, into an in-memory store that disappears when the app restarts. That

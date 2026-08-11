@@ -299,14 +299,16 @@ call the RAG/Milvus features), so a WAR that never uses them never loads them. *
 <dependency>
     <groupId>dev.langchain4j</groupId>
     <artifactId>langchain4j-easy-rag</artifactId>
-    <version>1.16.3</version>
+    <version>1.16.3-beta26</version>
 </dependency>
 <dependency>
     <groupId>dev.langchain4j</groupId>
     <artifactId>langchain4j-milvus</artifactId>   <!-- only if you use withMilvus(...) -->
-    <version>1.16.3</version>
+    <version>1.16.3-beta26</version>
 </dependency>
 ```
+
+> **On the version:** `easy-rag` and `milvus` are langchain4j *“beta” modules* with their own numbering, so the version is `1.16.3-beta26` (**not** `1.16.3`) — it's the one the `langchain4j-bom:1.16.3` that TabForge AI 3.1.0 builds on pins. Prefer no hard-coded version? Import `langchain4j-bom:1.16.3` in your `<dependencyManagement>` and omit the `<version>` on both.
 
 Then follow the setup guides — DynTabs takes 6 steps (faces-config, template include, beans.xml, etc.), EasyAI takes 2 (dependency + `easyai.properties`). Full instructions with copy-paste examples are in the guides below.
 

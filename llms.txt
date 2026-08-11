@@ -23,7 +23,7 @@ Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in
     <version>3.1.0</version>
 </dependency>
 ```
-As of 3.1.0, `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` (not in your WAR by default; a chat/tools app needs neither, and they load lazily). If you use `withRAG(...)`, `withMilvus(...)` or `extract().from(document)`, add both to your pom explicitly (version 1.16.3). See section 7.
+As of 3.1.0, `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` (not in your WAR by default; a chat/tools app needs neither, and they load lazily). If you use `withRAG(...)`, `withMilvus(...)` or `extract().from(document)`, add both to your pom explicitly (version 1.16.3-beta26 — a langchain4j beta-module version, NOT 1.16.3; or import langchain4j-bom:1.16.3 and omit the version). See section 7.
 
 ### Configuration — src/main/resources/easyai.properties
 ```properties
@@ -278,7 +278,7 @@ bot.ask("How many vacation days do employees get?");
 
 `.withMilvus(...)` takes precedence over `.withRAG(...)` / `@EasyRAG`. Connection can come from `easyai.milvus.*` properties via no-arg `.toMilvus()` / `.withMilvus()`. The dimension (default 384) must match the embedding model. Tuning: `.withMilvus(MilvusConfig.of(...), maxResults, minScore)`.
 
-**Dependencies (3.1.0+):** `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` in the tabforge-ai pom, so add them to your own WAR to use RAG/Milvus/`extract().from(document)` (version 1.16.3). They load lazily, so a chat/tools-only WAR that never calls these never loads the jars.
+**Dependencies (3.1.0+):** `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` in the tabforge-ai pom, so add them to your own WAR to use RAG/Milvus/`extract().from(document)` (version 1.16.3-beta26 — a langchain4j beta-module version, NOT 1.16.3; or import langchain4j-bom:1.16.3 and omit the version). They load lazily, so a chat/tools-only WAR that never calls these never loads the jars.
 
 ### 8. Structured Extraction — EasyAI.extract()
 
