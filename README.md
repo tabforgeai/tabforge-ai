@@ -269,7 +269,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 - Java 21+
 - Jakarta EE 11+ (CDI 4, EJB 4)
 - PrimeFaces 13+ *(DynTabs module only)*
-- LangChain4J 1.15.1 *(included transitively)*
+- LangChain4J 1.23.0 *(included transitively)*
 
 ---
 
@@ -299,16 +299,35 @@ call the RAG/Milvus features), so a WAR that never uses them never loads them. *
 <dependency>
     <groupId>dev.langchain4j</groupId>
     <artifactId>langchain4j-easy-rag</artifactId>
-    <version>1.16.3-beta26</version>
+    <version>1.23.0-beta33</version>
 </dependency>
 <dependency>
     <groupId>dev.langchain4j</groupId>
     <artifactId>langchain4j-milvus</artifactId>   <!-- only if you use withMilvus(...) -->
-    <version>1.16.3-beta26</version>
+    <version>1.23.0-beta33</version>
 </dependency>
 ```
 
-> **On the version:** `easy-rag` and `milvus` are langchain4j *“beta” modules* with their own numbering, so the version is `1.16.3-beta26` (**not** `1.16.3`) — it's the one the `langchain4j-bom:1.16.3` that TabForge AI 3.1.0 builds on pins. Prefer no hard-coded version? Import `langchain4j-bom:1.16.3` in your `<dependencyManagement>` and omit the `<version>` on both.
+> **On the version:** `easy-rag` and `milvus` are langchain4j *“beta” modules* with their own numbering, so the version is `1.23.0-beta33` (**not** `1.23.0`) — it's the one the `langchain4j-bom:1.23.0` that this release builds on pins. Prefer no hard-coded version? Import `langchain4j-bom:1.23.0` in your `<dependencyManagement>` and omit the `<version>` on both.
+
+> ⚠️ **If you declare BOTH `easy-rag` and `milvus`, add one more pin.** Maven resolves
+> `commons-lang3` by "nearest wins", and the Milvus path is shorter than the Tika path:
+> `milvus → milvus-sdk-java → commons-text → commons-lang3:3.12.0` beats
+> `easy-rag → …tika… → commons-lang3:3.21.0`. But Tika/POI need
+> `org.apache.commons.lang3.SystemProperties`, which only exists from 3.13.0 — so document
+> parsing fails at **runtime** with `NoClassDefFoundError`. Force the newer one:
+>
+> ```xml
+> <dependency>
+>     <groupId>org.apache.commons</groupId>
+>     <artifactId>commons-lang3</artifactId>
+>     <version>3.21.0</version>
+> </dependency>
+> ```
+>
+> (Only needed when both optional modules are present. TabForge AI's own build pins it the same
+> way, but `dependencyManagement` is not inherited by your application, so the pin has to be
+> repeated in your POM.)
 
 Then follow the setup guides — DynTabs takes 6 steps (faces-config, template include, beans.xml, etc.), EasyAI takes 2 (dependency + `easyai.properties`). Full instructions with copy-paste examples are in the guides below.
 

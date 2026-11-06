@@ -47,9 +47,32 @@
             <dependency>
                 <groupId>dev.langchain4j</groupId>
                 <artifactId>langchain4j-bom</artifactId>
-                <version>1.16.3</version>
+                <version>1.23.0</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <!--
+                Pin commons-lang3 ABOVE what Maven would otherwise resolve.
+
+                Why: with both optional modules on the classpath, Maven's "nearest wins" rule
+                picks the WRONG version. The Milvus path is shallower than the Tika path:
+
+                  tabforge-ai -> langchain4j-milvus -> milvus-sdk-java -> commons-text -> commons-lang3:3.12.0   (depth 4, wins)
+                  tabforge-ai -> langchain4j-easy-rag -> ...tika... -> commons-lang3:3.21.0                      (depth 5, loses)
+
+                But Tika 3.3.3 / POI 5.5.1 need org.apache.commons.lang3.SystemProperties, which
+                only exists from 3.13.0 onward — so document parsing dies with
+                NoClassDefFoundError at runtime. Pinning it here makes the newer version win.
+
+                NOTE for consumers: this dependencyManagement block governs THIS build only, it is
+                not inherited by applications that depend on tabforge-ai. An app that declares BOTH
+                langchain4j-easy-rag AND langchain4j-milvus must repeat this pin in its own POM —
+                see README / easyai_guide "Optional RAG & Milvus dependencies".
+            -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.21.0</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

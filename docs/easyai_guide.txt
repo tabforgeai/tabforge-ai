@@ -940,18 +940,36 @@
     <dependency>
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-easy-rag</artifactId>
-      <version>1.16.3-beta26</version>
+      <version>1.23.0-beta33</version>
     </dependency>
     <dependency>
       <groupId>dev.langchain4j</groupId>
       <artifactId>langchain4j-milvus</artifactId>   <!-- only for withMilvus(...) -->
-      <version>1.16.3-beta26</version>
+      <version>1.23.0-beta33</version>
     </dependency>
 
   On the version: easy-rag and milvus are langchain4j "beta" modules with their OWN
-  numbering, so it is 1.16.3-beta26 (NOT 1.16.3) -- the version the langchain4j-bom
-  1.16.3 that TabForge AI 3.1.0 builds on pins. If you prefer not to hard-code it,
-  import langchain4j-bom:1.16.3 into your <dependencyManagement> and omit <version>.
+  numbering, so it is 1.23.0-beta33 (NOT 1.23.0) -- the version the langchain4j-bom
+  1.23.0 that this release builds on pins. If you prefer not to hard-code it,
+  import langchain4j-bom:1.23.0 into your <dependencyManagement> and omit <version>.
+
+  !! IF YOU DECLARE BOTH easy-rag AND milvus, ADD ONE MORE PIN.
+  Maven picks commons-lang3 by "nearest wins", and the Milvus path is shorter:
+
+    milvus  -> milvus-sdk-java -> commons-text -> commons-lang3:3.12.0   (depth 4, WINS)
+    easy-rag -> ...tika...                     -> commons-lang3:3.21.0   (depth 5, loses)
+
+  Tika/POI need org.apache.commons.lang3.SystemProperties, which exists only from
+  3.13.0 -- so document parsing fails at RUNTIME with NoClassDefFoundError. Force it:
+
+    <dependency>
+      <groupId>org.apache.commons</groupId>
+      <artifactId>commons-lang3</artifactId>
+      <version>3.21.0</version>
+    </dependency>
+
+  Needed only when BOTH optional modules are present. The tabforge-ai build pins it the
+  same way, but <dependencyManagement> is not inherited by your app, so repeat the pin.
 
   (langchain4j and langchain4j-open-ai stay mandatory; only the RAG/Milvus jars moved
   to optional. The demo adds easy-rag for its RAG tabs; the starter doesn't use RAG.)
