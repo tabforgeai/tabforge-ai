@@ -176,6 +176,31 @@ Invoice inv = EasyAI.extract(Invoice.class)
 em.persist(inv);   // no AI from here on — it's just a typed object your code already understands
 ```
 
+```java
+// 8. Voice — let users TALK to the assistant you already have
+String spoken = EasyAI.listen().from(audioBytes, "audio/webm");   // speech → text
+String answer = salesBot.ask(spoken);                             // the SAME assistant, tools and all
+Speech speech = EasyAI.speak().from(answer);                      // text → speech (bytes + MIME type)
+
+// Voice settings inherit your chat settings — if chat is configured, this needs no new config
+```
+
+```java
+// 9. Cheap decisions — a closed question answered with a PROBABILITY, not prose
+if (EasyAI.decide(ticketText).isYes("Is the customer completely blocked?", 0.80)) {
+    pagerService.wake();          // the 0.80 is YOUR threshold, in your code, in the open
+}
+
+// several judgements in ONE small call, instead of a full chat completion each
+Decisions d = EasyAI.decide(ticketText)
+    .yesNo("urgent",   "Is the customer completely blocked?")
+    .choice("team",    "Which team should handle this?", "billing", "technical", "sales")
+    .scale("severity", "How severe is the business impact?", "low", "medium", "high")
+    .ask();
+
+log.info("Triage: {}", d.summary());   // urgent=0.91, team=technical, severity=1.40  ← auditable
+```
+
 
 ### What you get
 
@@ -186,6 +211,8 @@ em.persist(inv);   // no AI from here on — it's just a typed object your code 
 - **Structured extraction** — `EasyAI.extract(Invoice.class).from(text or PDF)` returns a populated record/POJO. Parses the document, extracts, retries on malformed output, and optionally runs Jakarta Bean Validation — in one call
 - **Autonomous agent** — `EasyAI.agent()` executes multi-step tasks across your services without manual orchestration. Built-in step limit, step listener, and planning prompt.
 - **Deterministic flow** — `EasyAI.flow()` runs named steps in the order *you* declare in Java, calling the LLM only at the edges (understand / summarize). For a known business process (check stock → pay → ship) where the order is fixed and correctness beats flexibility: same order every run, unit-testable, injection-safe. The disciplined counterpart to `agent()` — *LLM for language, Java for logic*.
+- **Cheap decisions** — `EasyAI.decide(text).isYes(question, 0.80)` answers a closed question with a *probability* in one small call instead of a full chat completion. Several questions ride in one call. There is deliberately no `isYes(question)` without a threshold: a probability only becomes a decision at a line **you** chose, written where a reviewer can see it. `summary()` logs the measurements, not just the verdicts, so a disputed decision can actually be audited. Slots straight into a `flow()` condition — the model is a sensor, your Java keeps the decision.
+- **Voice channel** — `EasyAI.listen().from(audio, mime)` returns a transcript; `EasyAI.speak().from(text)` returns audio with its MIME type already set. Voice is a *channel* into the assistant you already have, not a second brain — so a spoken request inherits your tools, memory and context unchanged. Settings inherit your chat settings, so an app already wired to a provider gains speech with **no new configuration**; server-side transcription also detects the language, unlike a browser recognizer pinned to one locale. Zero extra dependencies.
 - **Live observability** *(new in 2.1)* — `.withEventListener(...)` streams an `EasyAIEvent` for every moment of an operation (started → tool call → result → finished). Transport-agnostic: log it, meter it, or push it to a live UI. See below.
 - **CDI integration** — assistants are injectable with `@Inject`. Tool beans are auto-wired via `tools = {...}` on the annotation.
 - **Global config + per-call override** — set API key once with `EasyAI.configure()`, override per assistant if needed
@@ -193,7 +220,7 @@ em.persist(inv);   // no AI from here on — it's just a typed object your code 
 
 ### Live observability (new in 2.1)
 
-EasyAI normally works silently and hands you a final answer. Add **one method** — `.withEventListener(listener)` — and it will instead *narrate itself* as it runs: an `EasyAIEvent` for "I started", "I'm calling tool X", "tool X returned", "I'm on document 7 of 200", "I finished". It works on every capability — `EasyAI.chat()`, `EasyAI.assistant()`, `EasyAI.agent()`, `EasyAI.flow()`, `EasyAI.indexer()`, and `EasyAI.extract()`.
+EasyAI normally works silently and hands you a final answer. Add **one method** — `.withEventListener(listener)` — and it will instead *narrate itself* as it runs: an `EasyAIEvent` for "I started", "I'm calling tool X", "tool X returned", "I'm on document 7 of 200", "I finished". It works on every capability — `EasyAI.chat()`, `EasyAI.assistant()`, `EasyAI.agent()`, `EasyAI.flow()`, `EasyAI.indexer()`, `EasyAI.extract()`, `EasyAI.listen()`/`EasyAI.speak()`, and `EasyAI.decide()`.
 
 ```java
 EasyAgent agent = EasyAI.agent()
@@ -257,6 +284,7 @@ If you are building on Jakarta EE, Spring AI is simply the wrong tool — it req
 | **Agent execution trace** | `withStepListener(step -> ...)` — typed callback with tool name, args, and result per step | Via custom advisors or Micrometer observation — no typed per-step callback out of the box |
 | **Agent planning prompt** | `withPlanningPrompt(true)` — instructs the model to plan before acting | Write your own system prompt — no built-in toggle |
 | **Deterministic pipeline** | `EasyAI.flow()` — named steps in a fixed order *you* author, LLM only at declared edges; typed context, unit-testable, same order every run | No first-class equivalent — hand-write the orchestration, or let the model drive tool calls (non-deterministic) |
+| **Voice (speech in / out)** | `EasyAI.listen().from(bytes, mime)` → transcript, with overloads for `byte[]`, `InputStream` and `Path`; `EasyAI.speak().from(text)` → audio **carrying its MIME type**, plus `base64()` / `writeTo()` / `saveTo()`. Narrated on the same event stream as every other capability | `OpenAiAudioTranscriptionModel` / `OpenAiAudioSpeechModel` beans are auto-configured by the starter, but you build an `AudioTranscriptionPrompt` around a Spring `Resource` (wrap an uploaded `byte[]` yourself) and deal with response format and media type on your side |
 
 <sub>Comparison reflects Spring AI 2.0.0-M8 (May 2026). Spring AI is a capable, broad framework; the point here is fit for the **Jakarta EE** runtime and the amount of wiring each task takes — not that Spring AI can't do these things. The tool-call cap gap is tracked upstream in [spring-ai#3333](https://github.com/spring-projects/spring-ai/issues/3333).</sub>
 

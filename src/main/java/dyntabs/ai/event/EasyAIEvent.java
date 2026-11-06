@@ -61,7 +61,11 @@ public final class EasyAIEvent {
         /** {@code EasyAI.indexer()} — document ingestion into a vector store. */
         INDEXER,
         /** {@code EasyAI.extract(...)} — structured extraction of a typed object. */
-        EXTRACT
+        EXTRACT,
+        /** {@code EasyAI.listen()} / {@code EasyAI.speak()} — the voice channel (speech in or out). */
+        VOICE,
+        /** {@code EasyAI.decide(...)} — a cheap, probability-returning decision call. */
+        DECISION
     }
 
     /**

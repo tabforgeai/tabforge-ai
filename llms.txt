@@ -6,7 +6,7 @@
 ## What is TabForge AI?
 
 A Jakarta EE library with two independent modules:
-- **EasyAI** — add AI assistants, chatbots, RAG, autonomous agents, persistent vector store (Milvus), structured extraction, live event streaming, and ambient activity memory to Jakarta EE apps
+- **EasyAI** — add AI assistants, chatbots, RAG, autonomous agents, persistent vector store (Milvus), structured extraction, a voice channel (speech in/out), probability-based decisions, live event streaming, and ambient activity memory to Jakarta EE apps
 - **DynTabs** — multi-tab PrimeFaces UI with a custom CDI scope per tab (@TabScoped)
 
 Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in plain Java (no container needed).
@@ -33,6 +33,8 @@ easyai.model-name=gpt-4o-mini
 ```
 
 Supported providers: `openai`, `ollama`
+
+That is also all the configuration voice needs — `EasyAI.listen()` / `EasyAI.speak()` inherit these settings (see section 8b).
 
 For Ollama (local, free):
 ```properties
@@ -300,6 +302,57 @@ Supports records and POJOs, nested objects, lists, enums, and java.time types. O
 - `.validate()` — run Jakarta Bean Validation; throws `ExtractionException` on a violation
 - per-call config overrides (`.withModel`, `.withApiKey`, ...); extraction defaults to temperature 0.0
 
+### 8b. Voice — EasyAI.listen() / EasyAI.speak()
+
+Speech in and speech out. Voice is a CHANNEL into the assistant you already have, not a second brain: `listen()` returns plain text, which you pass to the same assistant (same tools, same context).
+
+```java
+// speech -> text
+String spoken = EasyAI.listen().from(audioBytes, "audio/webm");
+String answer = salesBot.ask(spoken);                 // the SAME assistant
+
+// text -> speech
+Speech speech = EasyAI.speak().from(answer);
+return Response.ok(speech.bytes()).type(speech.mimeType()).build();
+```
+
+Input overloads: `.from(byte[], mime)`, `.from(byte[])`, `.from(InputStream, mime)` (for a multipart part), `.from(Path)` (MIME detected from the file). `Speech` carries bytes + mimeType, plus `.base64()`, `.writeTo(OutputStream)`, `.saveTo(Path)`.
+
+Options: `.withLanguage(iso639_1)` (omit to auto-detect — a server-side model is multilingual, unlike a browser recognizer pinned to one locale), `.withModel(...)`, `.withVoice(...)` (speak only), `.withApiKey/.withBaseUrl/.withConfig(VoiceConfig)`, `.withEventListener(...)` (events under `Source.VOICE`).
+
+Configuration: **voice inherits the chat settings**, so if `easyai.provider`/`api-key`/`base-url` are set, voice needs NO new config. Optional overrides: `easyai.stt.model-name` / `easyai.stt.language` / `easyai.stt.api-key` / `easyai.stt.base-url`, and `easyai.tts.model-name` / `easyai.tts.voice` / `easyai.tts.api-key` / `easyai.tts.base-url`. Defaults are `whisper-1` and `tts-1` + voice `alloy`. **The model name is NOT inherited from `easyai.model-name`** (that is a chat model) and nothing is guessed from the base URL — on Groq you must set `easyai.stt.model-name=whisper-large-v3`. Escape hatch to raw LangChain4J: `VoiceEngine.transcriptionModel(config)` / `VoiceEngine.speechModel(config)`. Requires no extra dependency.
+
+### 8c. Cheap Decisions — EasyAI.decide()
+
+A closed question answered with a **probability**, in one small call — instead of a full chat completion that hands back a word. For routing, triage, classification and gating.
+
+```java
+if (EasyAI.decide(ticketText).isYes("Is the customer completely blocked?", 0.80)) {
+    pagerService.wake();
+}
+
+String team = EasyAI.decide(ticketText)
+    .choose("Which team should handle this?", "billing", "technical", "sales");
+
+// several judgements in ONE call
+Decisions d = EasyAI.decide(ticketText)
+    .yesNo("urgent",   "Is the customer completely blocked?")
+    .choice("team",    "Which team should handle this?", "billing", "technical", "sales")
+    .scale("severity", "How severe is the business impact?", "low", "medium", "high")
+    .ask();
+
+if (d.isYes("urgent", 0.80)) pagerService.wake();
+log.info("Triage: {}", d.summary());   // urgent=0.91, team=technical, severity=1.40
+```
+
+**There is deliberately no `isYes(question)` without a threshold** — a probability only becomes a decision at a line the developer chose. Do not suggest a default threshold; make the caller pick one.
+
+Result accessors: `isYes(name, threshold)`, `probability(name)`, `choice(name)`, `mean(name)`, `isRefused(name)`, `summary()`, `raw()`. The ones that can be absent return `OptionalDouble` — `probabilityOf(name, option)`, `margin(name)`, `confidence(name)` — because probabilities are optional in the protocol and the raw LangChain4J accessors **throw** when none were reported. `margin(name) < 0.15` is the idiomatic "too close to call, send it to a human" check.
+
+Pairs with `flow()`: `.stepIf("escalate", ctx -> EasyAI.decide(ctx.inputText()).isYes("...", 0.75), ctx -> ...)` — the model is a sensor, the pipeline stays declared in Java.
+
+⚠ **Not every OpenAI-compatible provider supports this.** Probabilities need token log-probabilities; Groq rejects them. If the chat provider is not OpenAI, set `easyai.decision.api-key` and `easyai.decision.base-url` explicitly. Options: `Map<option, description>` when option codes are opaque. Escape hatch: `DecisionEngine.model(config)`. Requires no extra dependency.
+
 ### 9. Live Event Stream — observe the AI as it works
 
 Get a live callback for each step the AI takes (tool call, result, agent start/finish), e.g. to drive a real-time UI activity panel. The library stays transport-agnostic — you decide where events go (SSE, WebSocket, log).
@@ -311,7 +364,7 @@ EasyAgent agent = EasyAI.agent()
     .build();
 ```
 
-Available on every capability — `chat()`, `assistant()`, `agent()`, `flow()`, `indexer()`, and `extract()` — via `.withEventListener(...)`. (For `assistant()` the stream is the per-tool-call slice: STEP_STARTED/STEP per tool, since the assistant method is invoked directly by your code.) The agent additionally offers `.withStepListener(step -> ...)` for a typed `AgentStep` (stepNumber/toolName/arguments/result).
+Available on every capability — `chat()`, `assistant()`, `agent()`, `flow()`, `indexer()`, `extract()`, `listen()`/`speak()`, and `decide()` — via `.withEventListener(...)`. (For `assistant()` the stream is the per-tool-call slice: STEP_STARTED/STEP per tool, since the assistant method is invoked directly by your code.) The agent additionally offers `.withStepListener(step -> ...)` for a typed `AgentStep` (stepNumber/toolName/arguments/result).
 
 ### 10. Ambient Activity Memory — .withActivityContext()
 
@@ -456,6 +509,22 @@ public class AgentBean {
 | `easyai.milvus.port` | Milvus port | `19530` |
 | `easyai.milvus.collection` | Collection name | (required) |
 | `easyai.milvus.dimension` | Embedding dimension | `384` |
+| `easyai.stt.model-name` | Transcription model (use case 13) | `whisper-1` |
+| `easyai.stt.language` | Expected language, ISO-639-1 | (auto-detect) |
+| `easyai.stt.api-key` | Key for transcription | falls back to `easyai.api-key` |
+| `easyai.stt.base-url` | Endpoint for transcription | falls back to `easyai.base-url` |
+| `easyai.stt.provider` | Provider for transcription | falls back to `easyai.provider` |
+| `easyai.tts.model-name` | Synthesis model | `tts-1` |
+| `easyai.tts.voice` | Synthesis voice | `alloy` |
+| `easyai.tts.api-key` | Key for synthesis | falls back to `easyai.api-key` |
+| `easyai.tts.base-url` | Endpoint for synthesis | falls back to `easyai.base-url` |
+| `easyai.tts.provider` | Provider for synthesis | falls back to `easyai.provider` |
+| `easyai.decision.model-name` | Decision model (use case 14) | `gpt-6-luna` |
+| `easyai.decision.api-key` | Key for decisions | falls back to `easyai.api-key` |
+| `easyai.decision.base-url` | Endpoint for decisions | falls back to `easyai.base-url` |
+| `easyai.decision.provider` | Provider for decisions | falls back to `easyai.provider` |
+
+The `easyai.stt.*` / `easyai.tts.*` keys are all optional: voice inherits the chat settings. Note that `easyai.model-name` is deliberately NOT inherited by voice (a chat model is not a transcription model), so on a non-OpenAI endpoint name the model explicitly — e.g. `easyai.stt.model-name=whisper-large-v3` on Groq.
 
 Programmatic override:
 ```java

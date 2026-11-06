@@ -290,6 +290,97 @@ public final class EasyAI {
     }
 
     /**
+     * Starts a <b>speech&nbsp;→&nbsp;text</b> transcription — the inbound voice channel.
+     *
+     * <p>Voice is a new <em>channel</em> into the assistant you already have, not a second brain.
+     * This returns plain text, which you then hand to the same {@link #assistant(Class) assistant},
+     * so a spoken "cancel this order" behaves exactly like the typed one — same tools, same memory,
+     * same context. Transcribing and deciding stay deliberately separate.</p>
+     *
+     * <pre>{@code
+     * // In a JAX-RS endpoint receiving a recording from the browser:
+     * String spoken = EasyAI.listen().from(audioBytes, "audio/webm");
+     * String answer = assistant.chat(spoken);
+     * }</pre>
+     *
+     * <p>Configuration comes from {@code easyai.properties} and <b>falls back to your chat
+     * settings</b>, so an app already wired to an OpenAI-compatible provider gains speech input
+     * with no new configuration (see {@link dyntabs.ai.voice.VoiceConfig}).</p>
+     *
+     * @return a new {@link ListenBuilder}
+     * @see ListenBuilder
+     * @see #speak()
+     * @see dyntabs.ai.voice.VoiceConfig
+     */
+    public static ListenBuilder listen() {
+        return new ListenBuilder();
+    }
+
+    /**
+     * Starts a <b>text&nbsp;→&nbsp;speech</b> synthesis — the outbound voice channel.
+     *
+     * <p>Returns the audio bytes together with their MIME type, ready to serve or store; playback
+     * is left to you. Use it when you need one consistent voice across browsers and devices, a
+     * language the client has no installed voice for, or audio you can keep and replay.</p>
+     *
+     * <pre>{@code
+     * Speech speech = EasyAI.speak().from("Order ORD-004 has been delivered.");
+     * return Response.ok(speech.bytes()).type(speech.mimeType()).build();
+     * }</pre>
+     *
+     * @return a new {@link SpeakBuilder}
+     * @see SpeakBuilder
+     * @see #listen()
+     * @see dyntabs.ai.voice.Speech
+     */
+    public static SpeakBuilder speak() {
+        return new SpeakBuilder();
+    }
+
+    /**
+     * Asks a small, cheap model a <b>closed question</b> about some text and returns a
+     * <b>probability</b> instead of prose.
+     *
+     * <p>Routing, triage, classification and gating are usually done with a full chat completion and
+     * a structured-output prompt — slow, costly, and it hands you a <em>word</em> when what you
+     * needed was a <em>number you can threshold</em>. This hands you the number:</p>
+     *
+     * <pre>{@code
+     * if (EasyAI.decide(ticketText).isYes("Is the customer completely blocked?", 0.80)) {
+     *     pager.wake();
+     * }
+     *
+     * String team = EasyAI.decide(ticketText)
+     *     .choose("Which team should handle this?", "billing", "technical", "sales");
+     *
+     * // or several questions in ONE call:
+     * Decisions d = EasyAI.decide(ticketText)
+     *     .yesNo("urgent",   "Is the customer completely blocked?")
+     *     .choice("team",    "Which team should handle this?", "billing", "technical", "sales")
+     *     .scale("severity", "How severe is the business impact?", "low", "medium", "high")
+     *     .ask();
+     * }</pre>
+     *
+     * <p>This is {@link #flow()}'s principle applied to judgement: <b>the model is a sensor, your
+     * Java keeps the decision</b>. There is deliberately no {@code isYes(question)} without a
+     * threshold — a probability only becomes a decision at a line somebody chose, and that line
+     * belongs in your code where a reviewer can see it.</p>
+     *
+     * <p><b>Note:</b> decision models need token log-probabilities, which is <em>not</em> part of the
+     * OpenAI-compatible surface every provider implements (Groq rejects it). See
+     * {@link dyntabs.ai.decision.DecisionConfig} if your chat provider is not OpenAI.</p>
+     *
+     * @param input the text to judge — a ticket, an email, a transcript, a diff
+     * @return a new {@link DecisionBuilder}
+     * @see DecisionBuilder
+     * @see dyntabs.ai.decision.Decisions
+     * @see dyntabs.ai.decision.DecisionConfig
+     */
+    public static DecisionBuilder decide(String input) {
+        return new DecisionBuilder(input);
+    }
+
+    /**
      * Sets a global configuration that will be used as default for all
      * new conversations and assistants (unless overridden per-builder).
      *

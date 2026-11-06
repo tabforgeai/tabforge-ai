@@ -13,7 +13,7 @@
   complexity behind a simple builder-pattern API. You don't need to know anything
   about ChatModel, AiServices, ToolSpecification, or EmbeddingStore.
 
-  You just need to know 7 things:
+  You just need to know 9 things:
     1. EasyAI.chat()       - for simple conversations
     2. EasyAI.assistant()  - for smart assistants that can call your Java code
     3. @EasyRAG            - for AI that answers questions from your documents
@@ -25,8 +25,12 @@
                              for persistent, large-scale RAG
     7. EasyAI.extract()    - to turn unstructured text or documents into
                              typed Java objects (records / POJOs)
+    8. EasyAI.listen()     - speech -> text, and text -> speech, so users can
+       EasyAI.speak()        TALK to the assistant you already have
+    9. EasyAI.decide()     - a closed question answered with a PROBABILITY, for
+                             routing/triage/gating; you keep the threshold
 
-  These seven are building blocks. In a real app they do NOT each get their own
+  These nine are building blocks. In a real app they do NOT each get their own
   chat box — they sit behind ONE chat window (the template's AI panel), backed by
   a single assistant that the model routes for you. The demo shows each capability
   in its own panel only because it is a gallery. See the chapter "PUTTING IT
@@ -1360,6 +1364,329 @@
 
   4. Recording never breaks the user's action. A failure to record is swallowed
      and logged - tab navigation and your service calls are unaffected.
+
+
+================================================================================
+  USE CASE 13: Voice (Speech In, Speech Out)
+================================================================================
+
+  Everything above is typed. This one lets users TALK to your application - and
+  lets it talk back.
+
+  The important idea first: voice is a new CHANNEL into the assistant you already
+  have, not a second brain. EasyAI.listen() gives you plain text; you hand that
+  text to the same assistant, with the same tools and the same context. So a
+  spoken "cancel this order" behaves exactly like the typed one.
+
+    // speech -> text
+    String spoken = EasyAI.listen().from(audioBytes, "audio/webm");
+
+    // ... the SAME assistant you already use
+    String answer = salesBot.ask(spoken);
+
+    // text -> speech
+    Speech speech = EasyAI.speak().from(answer);
+
+  Configuration is the part worth knowing about: voice INHERITS your chat
+  settings. If easyai.properties already has a provider and an api-key for chat,
+  listening and speaking work with NO new configuration at all. You only write an
+  easyai.stt.* / easyai.tts.* key when voice should differ from chat.
+
+
+  --- Scenario A: A warehouse worker with full hands ---
+
+  A picker walks the aisles with a tablet. Typing means putting a box down. Give
+  the AI panel a microphone button, post the recording to one endpoint, and the
+  existing tab-aware assistant answers as always.
+
+    @POST @Path("/voice")
+    @Consumes(MediaType.MULTIPART_FORM_DATA)
+    @Produces(MediaType.APPLICATION_JSON)
+    public VoiceReply voice(List<EntityPart> parts) throws IOException {
+
+        EntityPart audio = parts.stream()
+                .filter(p -> "audio".equals(p.getName()))
+                .findFirst().orElseThrow();
+
+        // 1. hear it  (the stream overload - no byte juggling needed)
+        String spoken = EasyAI.listen()
+                              .from(audio.getContent(), audio.getMediaType().toString());
+
+        // 2. let the assistant you ALREADY have answer it
+        String answer = assistant.ask(spoken);
+
+        // 3. send back both: the user never saw their own words
+        return new VoiceReply(spoken, answer);
+    }
+
+  Returning the transcript matters in practice: a voice user has no idea what was
+  heard until you show them. "You said: ..." is what makes a voice interface
+  trustworthy.
+
+  On the browser side, record with MediaRecorder and POST the Blob as multipart.
+  For reading the answer aloud, the browser's own speechSynthesis is free and
+  needs no server round trip - reach for EasyAI.speak() when you need something
+  it cannot give you (see Scenario B).
+
+
+  --- Scenario B: An accessible confirmation you can store and replay ---
+
+  A public-sector portal must meet accessibility rules (Section 508 / EN 301 549)
+  and keep an audio copy of each confirmation. Browser speech cannot be stored,
+  and the voices differ per device and may not exist at all for the language you
+  need. Synthesize server-side instead:
+
+    Speech speech = EasyAI.speak()
+                          .withVoice("nova")
+                          .from("Your application 2026-14821 has been received.");
+
+    speech.saveTo(Path.of("/var/audio/confirm-2026-14821.mp3"));   // keep a copy
+
+    return Response.ok(speech.bytes())
+                   .type(speech.mimeType())                       // never guessed
+                   .build();
+
+  Speech carries the bytes AND the MIME type on purpose. A bare byte[] is not
+  enough to answer an HTTP request, and guessing the Content-Type is how audio
+  ends up silently unplayable in a browser. It also offers .base64() for a JSON
+  field or an <audio src="data:..."> attribute, and .writeTo(OutputStream) for
+  StreamingOutput.
+
+
+  --- Scenario C: Bilingual users, one microphone ---
+
+  A browser recognizer is pinned to one locale: set it to en-US and Serbian comes
+  out as nonsense. A server-side transcription model detects the language itself,
+  so the same button serves both - which is usually what you want for a mixed
+  audience:
+
+    String spoken = EasyAI.listen().from(audioBytes, "audio/webm");   // auto-detect
+
+  When you DO know the language, say so and gain accuracy:
+
+    String spoken = EasyAI.listen()
+                          .withLanguage("sr")        // ISO-639-1
+                          .from(audioBytes, "audio/webm");
+
+
+  --- Configuration ---
+
+  Nothing below is required if chat is already configured. Each key falls back to
+  its chat equivalent:
+
+    # Only needed when voice should differ from chat:
+    easyai.stt.model-name=whisper-large-v3     # REQUIRED on Groq (see note)
+    easyai.stt.language=sr                     # optional; omit to auto-detect
+    easyai.stt.api-key=...                     # falls back to easyai.api-key
+    easyai.stt.base-url=...                    # falls back to easyai.base-url
+
+    easyai.tts.model-name=tts-1
+    easyai.tts.voice=alloy
+    easyai.tts.api-key=...                     # falls back to easyai.api-key
+    easyai.tts.base-url=...                    # falls back to easyai.base-url
+
+  Note on the model name: the defaults are OpenAI's own (whisper-1, tts-1), and
+  NOTHING is guessed from the base URL. If your base-url points at another
+  OpenAI-compatible service, name its model explicitly - on Groq that is
+  whisper-large-v3. This is deliberate: a wrong model name fails loudly at the
+  provider, which is far easier to debug than a library quietly choosing a
+  different model than you intended.
+
+  The model name is the one chat setting that is NOT inherited - easyai.model-name
+  is a CHAT model, and sending it to a transcription endpoint would fail in a
+  confusing way.
+
+
+  --- Options ---
+
+    EasyAI.listen()
+      .withLanguage(code)    - ISO-639-1 expected language; omit to auto-detect
+      .withModel(name)       - transcription model (default whisper-1)
+      .withApiKey / .withBaseUrl / .withConfig(VoiceConfig)
+      .withEventListener(l)  - stream the transcription to your Activity Panel
+      .from(byte[], mime) / .from(byte[]) / .from(InputStream, mime) / .from(Path)
+                             -> String transcript (the Path overload detects the
+                                MIME type from the file itself)
+
+    EasyAI.speak()
+      .withVoice(name)       - e.g. "alloy", "nova"  (default alloy)
+      .withModel(name)       - synthesis model (default tts-1)
+      .withApiKey / .withBaseUrl / .withConfig(VoiceConfig)
+      .withEventListener(l)
+      .from(text)            -> Speech (bytes + mimeType + base64/writeTo/saveTo)
+
+  Both fail fast with a message naming the property to set when no API key is
+  configured, instead of letting the provider throw something cryptic.
+
+  Need the raw LangChain4J model? VoiceEngine.transcriptionModel(config) and
+  VoiceEngine.speechModel(config) hand it to you - choosing EasyAI never means
+  losing access to the layer underneath.
+
+  Tip: add .withEventListener(...) and voice shows up in the Activity Panel like
+  every other capability, under EasyAIEvent.Source.VOICE - STARTED when the call
+  begins, then RESULT carrying the transcript. Showing users what was heard is the
+  single most reassuring thing a voice interface can do. See USE CASE 12 for
+  wiring events into the panel.
+
+
+================================================================================
+  USE CASE 14: Cheap Decisions (A Probability, Not Prose)
+================================================================================
+
+  Every use case so far asks a model to PRODUCE something - text, a typed object,
+  a transcript. This one asks it to JUDGE something, and hands back a number.
+
+  Routing, triage, classification and gating are normally done with a full chat
+  completion plus a structured-output prompt. That is slow, costs a whole
+  generation, and returns a WORD ("urgent") when what you needed was a NUMBER you
+  can threshold. A decision call returns the number:
+
+    if (EasyAI.decide(ticketText).isYes("Is the customer completely blocked?", 0.80)) {
+        pager.wake();
+    }
+
+    String team = EasyAI.decide(ticketText)
+                        .choose("Which team should handle this?", "billing", "technical", "sales");
+
+  Note what is NOT in the model's hands: the 0.80. There is deliberately no
+  isYes(question) without a threshold. A probability only becomes a decision at a
+  line somebody chose, and that line belongs in your code where a reviewer can
+  see it. "A measured probability crossed a threshold I chose" is a defensible
+  sentence in a post-mortem. "The AI decided" is not.
+
+  !! BEFORE YOU START: this is NOT part of the OpenAI-compatible surface every
+  provider implements. Probabilities require token log-probabilities, and Groq,
+  for one, rejects them. If your chat provider is not OpenAI, set both:
+
+    easyai.decision.api-key=sk-...
+    easyai.decision.base-url=https://api.openai.com/v1/
+
+
+  --- Scenario A: Support triage in one call ---
+
+  An inbound ticket needs three judgements: is it urgent, who handles it, how bad
+  is it. Asking three times costs three calls; ask once:
+
+    Decisions d = EasyAI.decide(ticketText)
+        .yesNo("urgent",   "Is the customer completely blocked from working?")
+        .choice("team",    "Which team should handle this?", "billing", "technical", "sales")
+        .scale("severity", "How severe is the business impact?", "low", "medium", "high")
+        .ask();
+
+    if (d.isYes("urgent", 0.80)) pagerService.wake();
+    ticket.setTeam(d.choice("team"));
+    ticket.setSeverity(d.mean("severity"));     // 0.0 .. 2.0, may land BETWEEN levels
+
+    log.info("Triage: {}", d.summary());        // urgent=0.91, team=technical, severity=1.40
+
+  The log line is the point as much as the routing: it records the MEASUREMENTS,
+  so a disputed decision can be reviewed later. A trail that says "urgent=yes"
+  cannot be audited; one that says "urgent=0.91, threshold 0.80" can.
+
+  Tip: when "urgent" means something specific in your business, say so instead of
+  hoping the model shares your definition:
+
+    .yesNo("urgent", "Is this urgent?",
+           "the customer cannot transact at all",            // yes when
+           "there is a workaround, or it is a question")     // no when
+
+
+  --- Scenario B: Gate a deterministic flow on a measured probability ---
+
+  This is where it pays off. USE CASE 9 (flow) runs YOUR steps in YOUR order, with
+  the LLM only at the edges. A decision slots straight into a step condition, so
+  the pipeline can branch on a judgement while staying auditable: the model
+  supplies the reading, your Java supplies the threshold and the order.
+
+    FlowContext out = EasyAI.flow()
+        .step("classify",  ctx -> claimService.load(ctx.inputText()))
+        .stepIf("escalate",
+                ctx -> EasyAI.decide(ctx.inputText()).isYes("Is the customer threatening to leave?", 0.75),
+                ctx -> retentionService.open(ctx.result("classify")))
+        .step("respond",   ctx -> replyService.draft(ctx))
+        .run(claimText);
+
+  No agent is deciding what happens next - you declared the pipeline. The only
+  thing the model contributed was one number, at one gate, with a threshold you
+  wrote down.
+
+
+  --- Scenario C: Send the uncertain ones to a human ---
+
+  The most useful thing a probability gives you is permission to NOT decide. If
+  the top two options are close, nobody should be routing automatically:
+
+    Decisions d = EasyAI.decide(emailBody)
+        .choice("intent", "What does this email want?", "order", "complaint", "invoice", "other")
+        .ask();
+
+    d.margin("intent").ifPresentOrElse(
+        margin -> {
+            if (margin < 0.15) humanQueue.submit(emailBody);   // too close to call
+            else route(d.choice("intent"));
+        },
+        () -> humanQueue.submit(emailBody));                   // no probabilities reported at all
+
+  margin() is the gap between the winner and the runner-up. It returns an
+  OptionalDouble on purpose: probabilities are OPTIONAL in the protocol, and the
+  raw LangChain4J accessor THROWS when the model did not report any. Code written
+  against the happy path looks correct, passes review, and fails in production on
+  the first answer without probabilities. Here the type tells you up front.
+
+
+  --- Options ---
+
+    EasyAI.decide(text)
+      single question (no names, no result object):
+        .isYes(question, threshold)   -> boolean   (threshold is required)
+        .probability(question)        -> double    (decide yourself)
+        .choose(question, options...) -> String
+        .rate(question, levels...)    -> double    (weighted position)
+
+      several questions, ONE call:
+        .yesNo(name, question)
+        .yesNo(name, question, yesWhen, noWhen)
+        .choice(name, question, options...)   / (..., List) / (..., Map<option,description>)
+        .scale(name, question, levels...)
+        .ask()                        -> Decisions
+
+      config: .withModel / .withApiKey / .withBaseUrl / .withProvider /
+              .withConfig(DecisionConfig) / .withEventListener
+
+    Decisions
+      .isYes(name, threshold)     -> boolean      (threshold required here too)
+      .probability(name)          -> double
+      .choice(name)               -> String
+      .probabilityOf(name, opt)   -> OptionalDouble    } empty when the model
+      .margin(name)               -> OptionalDouble    } reported no probabilities
+      .confidence(name)           -> OptionalDouble    }
+      .probabilities(name)        -> Map (empty, never null)
+      .mean(name)                 -> double
+      .isRefused(name)            -> boolean
+      .summary()                  -> one readable line WITH the numbers
+      .raw()                      -> the LangChain4J response (escape hatch)
+
+  Mistakes are named, not cryptic: a typo in a question name lists the names that
+  do exist, and reading a choice answer as yes/no says so instead of throwing a
+  ClassCastException. An out-of-range threshold (80 instead of 0.80) is caught
+  before the call is made, not after you have paid for it.
+
+  Use a Map for options when your codes mean nothing to a model - "L2_NET" on its
+  own is noise, "L2_NET" -> "network/connectivity faults" is a question:
+
+    .choice("queue", "Which queue?", Map.of(
+        "L1_GEN",  "general questions",
+        "L2_NET",  "network/connectivity faults",
+        "L3_BILL", "billing and invoices"))
+
+  Tip: add .withEventListener(...) and the decision appears in the Activity Panel
+  under EasyAIEvent.Source.DECISION, with the detail spelling out the whole
+  judgement - "Is the customer blocked? -> 0.91 (threshold 0.80) -> yes". See
+  USE CASE 12 for wiring events into the panel.
+
+  Note: LangChain4J also offers a declarative "decision services" layer (questions
+  as methods on an interface, like AI Services). EasyAI does not wrap it - it is
+  already concise, and you can use it directly alongside EasyAI.
 
 
 ================================================================================
