@@ -204,8 +204,7 @@
         <dependency>
             <groupId>org.primefaces</groupId>
             <artifactId>primefaces</artifactId>
-            <version>15.0.16</version>
-            <classifier>jakarta</classifier>
+            <version>16.0.1</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

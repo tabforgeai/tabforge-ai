@@ -296,7 +296,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 
 - Java 21+
 - Jakarta EE 11+ (CDI 4, EJB 4)
-- PrimeFaces 13+ *(DynTabs module only)*
+- PrimeFaces 16+ *(DynTabs module only)* — 16.0.1 is the version this release is built and tested against. PrimeFaces 16 dropped the `javax.*` artifacts, so the dependency no longer takes `<classifier>jakarta</classifier>`
 - LangChain4J 1.23.0 *(included transitively)*
 
 ---
