@@ -140,8 +140,8 @@ public class DecisionBuilder {
     }
 
     /**
-     * Override the base URL for this call. Read {@link DecisionConfig} first: a decision model needs
-     * log-probabilities, which not every OpenAI-compatible endpoint provides.
+     * Override the base URL for this call. Read {@link DecisionConfig} first: decisions use a dedicated
+     * endpoint that OpenAI-compatible chat providers do not implement.
      *
      * @param baseUrl the endpoint to call
      * @return this builder

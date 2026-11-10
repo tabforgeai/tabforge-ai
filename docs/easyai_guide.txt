@@ -1554,9 +1554,15 @@
   see it. "A measured probability crossed a threshold I chose" is a defensible
   sentence in a post-mortem. "The AI decided" is not.
 
-  !! BEFORE YOU START: this is NOT part of the OpenAI-compatible surface every
-  provider implements. Probabilities require token log-probabilities, and Groq,
-  for one, rejects them. If your chat provider is not OpenAI, set both:
+  !! BEFORE YOU START: a decision model is a DEDICATED endpoint, not a chat
+  completion with an extra parameter. OpenAI serves it at POST {baseUrl}/decisions
+  with its own small model (gpt-6-luna). OpenAI-compatible CHAT providers such as
+  Groq or DeepSeek do not implement that endpoint at all, so pointing decisions at
+  them returns 404 - being "OpenAI-compatible" does not help here.
+
+  Built in: OpenAI. LangChain4j also offers Ollama (its System One API - local,
+  free, no key; needs Ollama 0.35.0+ and a decision model such as nimble) and
+  TypeSafe, each in its own module. If your chat provider is not OpenAI, set both:
 
     easyai.decision.api-key=sk-...
     easyai.decision.base-url=https://api.openai.com/v1/

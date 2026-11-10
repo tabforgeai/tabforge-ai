@@ -366,8 +366,9 @@ public final class EasyAI {
      * threshold — a probability only becomes a decision at a line somebody chose, and that line
      * belongs in your code where a reviewer can see it.</p>
      *
-     * <p><b>Note:</b> decision models need token log-probabilities, which is <em>not</em> part of the
-     * OpenAI-compatible surface every provider implements (Groq rejects it). See
+     * <p><b>Note:</b> a decision model is a dedicated endpoint, not a chat completion - OpenAI
+     * serves it at {@code POST {baseUrl}/decisions}. OpenAI-compatible <em>chat</em> providers
+     * such as Groq or DeepSeek do not implement it. See
      * {@link dyntabs.ai.decision.DecisionConfig} if your chat provider is not OpenAI.</p>
      *
      * @param input the text to judge — a ticket, an email, a transcript, a diff

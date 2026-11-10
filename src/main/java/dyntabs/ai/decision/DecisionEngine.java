@@ -25,10 +25,12 @@ import dev.langchain4j.model.openai.OpenAiDecisionModel;
  * is why the API lets you ask them together instead of once per question.</p>
  *
  * <h2>Providers</h2>
- * <p>Only {@code "openai"} is built in. Note that this is <em>not</em> a capability every
- * OpenAI-compatible service implements: probabilities need token log-probabilities, which Groq, for
- * one, rejects. See {@link DecisionConfig} for what to configure when your chat provider is not
- * OpenAI. Other providers (Ollama, TypeSafe) plug in here and nowhere else.</p>
+ * <p>Only {@code "openai"} is built in. A decision model is a <b>dedicated endpoint</b>, not a chat
+ * completion: OpenAI serves it at {@code POST {baseUrl}/decisions}. OpenAI-compatible <em>chat</em>
+ * providers such as Groq or DeepSeek do not implement it and answer 404. See {@link DecisionConfig}
+ * for what to configure when your chat provider is not OpenAI. LangChain4j also ships Ollama (its
+ * local, key-free System One API) and TypeSafe in their own modules; they plug in here and nowhere
+ * else.</p>
  *
  * <p><b>Analogy:</b> a breathalyser rather than a conversation about whether someone seems drunk.
  * It returns a reading; the legal limit is set elsewhere, by someone accountable for it.</p>
@@ -86,8 +88,9 @@ public final class DecisionEngine {
         String provider = config.provider() == null ? "openai" : config.provider().toLowerCase();
         if (!"openai".equals(provider)) {
             throw new IllegalArgumentException("Unsupported decision provider: '" + provider
-                    + "'. Built in: 'openai'. Note that decision models need token log-probabilities, "
-                    + "which not every OpenAI-compatible service supports.");
+                    + "'. Built in: 'openai'. A decision model is a dedicated endpoint "
+                    + "(OpenAI: POST {baseUrl}/decisions), which OpenAI-compatible chat providers "
+                    + "such as Groq or DeepSeek do not implement.");
         }
         OpenAiDecisionModel.OpenAiDecisionModelBuilder builder = OpenAiDecisionModel.builder()
                 .apiKey(config.apiKey())

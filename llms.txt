@@ -351,7 +351,7 @@ Result accessors: `isYes(name, threshold)`, `probability(name)`, `choice(name)`,
 
 Pairs with `flow()`: `.stepIf("escalate", ctx -> EasyAI.decide(ctx.inputText()).isYes("...", 0.75), ctx -> ...)` — the model is a sensor, the pipeline stays declared in Java.
 
-⚠ **Not every OpenAI-compatible provider supports this.** Probabilities need token log-probabilities; Groq rejects them. If the chat provider is not OpenAI, set `easyai.decision.api-key` and `easyai.decision.base-url` explicitly. Options: `Map<option, description>` when option codes are opaque. Escape hatch: `DecisionEngine.model(config)`. Requires no extra dependency.
+⚠ **A decision model is a DEDICATED endpoint, not a chat completion.** OpenAI serves it at `POST {baseUrl}/decisions` (model `gpt-6-luna`); OpenAI-compatible CHAT providers such as Groq and DeepSeek do not implement it and return 404. LangChain4j also has Ollama (System One API, local and free) and TypeSafe, in their own modules. If the chat provider is not OpenAI, set `easyai.decision.api-key` and `easyai.decision.base-url` explicitly. Options: `Map<option, description>` when option codes are opaque. Escape hatch: `DecisionEngine.model(config)`. Requires no extra dependency.
 
 ### 9. Live Event Stream — observe the AI as it works
 

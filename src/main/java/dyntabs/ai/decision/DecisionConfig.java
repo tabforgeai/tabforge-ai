@@ -19,9 +19,10 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * <h2 id="not-openai-compatible">⚠ Read this if your chat provider is not OpenAI</h2>
- * <p>A decision model returns <b>probabilities</b>, which means it needs token log-probabilities from
- * the provider. That is <em>not</em> part of the OpenAI-compatible surface that services like Groq
- * implement — Groq rejects {@code logprobs} outright. So unlike
+ * <p>A decision model is a <b>dedicated endpoint</b>, not a chat completion with an extra parameter.
+ * OpenAI serves it at {@code POST {baseUrl}/decisions} with its own small model. OpenAI-compatible
+ * <em>chat</em> providers such as Groq or DeepSeek do not implement that endpoint at all and answer
+ * 404, so "OpenAI-compatible" buys you nothing here. So unlike
  * {@link dyntabs.ai.voice.VoiceConfig voice}, where inheriting the chat endpoint is almost always
  * right, here inheritance is only right when your chat provider <b>is</b> OpenAI.</p>
  * <p>If it is not, set both explicitly:</p>
