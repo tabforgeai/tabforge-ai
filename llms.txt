@@ -1,7 +1,7 @@
 # TabForge AI — LLM Context File
 # Use this file to understand the TabForge AI library API when helping developers write code.
 # GitHub: https://github.com/tabforgeai/tabforge-ai
-# Maven: io.github.tabforgeai:tabforge-ai:3.1.0
+# Maven: io.github.tabforgeai:tabforge-ai:4.0.0
 
 ## What is TabForge AI?
 
@@ -20,7 +20,7 @@ Target runtime: Jakarta EE (CDI, EJB, GlassFish, WildFly, Payara). Also works in
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>3.1.0</version>
+    <version>4.0.0</version>
 </dependency>
 ```
 As of 3.1.0, `langchain4j-easy-rag` and `langchain4j-milvus` are `<optional>` (not in your WAR by default; a chat/tools app needs neither, and they load lazily). If you use `withRAG(...)`, `withMilvus(...)` or `extract().from(document)`, add both to your pom explicitly (version 1.23.0-beta33 — a langchain4j beta-module version, NOT 1.23.0; or import langchain4j-bom:1.23.0 and omit the version). If you declare BOTH, also pin `org.apache.commons:commons-lang3:3.21.0` — Maven's "nearest wins" otherwise resolves 3.12.0 via Milvus and Tika/POI then fail at runtime with `NoClassDefFoundError: SystemProperties`. See section 7.

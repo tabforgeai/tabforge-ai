@@ -5,10 +5,12 @@ dyntabs.ai.agent
 dyntabs.ai.annotation
 dyntabs.ai.assistant
 dyntabs.ai.cdi
+dyntabs.ai.decision
 dyntabs.ai.event
 dyntabs.ai.extract
 dyntabs.ai.flow
 dyntabs.ai.rag
+dyntabs.ai.voice
 dyntabs.annotation
 dyntabs.interfaces
 dyntabs.scope

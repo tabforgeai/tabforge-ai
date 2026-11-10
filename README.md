@@ -240,7 +240,7 @@ agent.execute("Order 2 laptops for U123, charge the card, schedule delivery");
 
 The key design choice: **`EasyAIEvent` knows nothing about HTTP, SSE, WebSockets, or any UI's JSON schema.** It is a plain immutable value (`source`, `phase`, `status`, `title`, `detail`, `toolName`, `sequence`, `timestamp`). *You* decide what to do with it — so the same event stream can feed a log file, a metrics counter, or a real-time dashboard without EasyAI ever depending on any of them.
 
-For the full **"wow"** — every chat turn and agent tool call rendered live in a browser Activity panel — the [**starter**](https://github.com/tabforgeai/tabforge-ai-starter) ships the ~150 lines of (entirely app-side) Server-Sent-Events plumbing that maps `EasyAIEvent` → UI. You never write that mapping into your library code; it stays in your app, exactly where transport belongs.
+For the full **"wow"** — every chat turn and agent tool call rendered live in a browser Activity panel — the [**starter**](https://github.com/tabforgeai/tabforge-ai-starter-) ships the ~150 lines of (entirely app-side) Server-Sent-Events plumbing that maps `EasyAIEvent` → UI. You never write that mapping into your library code; it stays in your app, exactly where transport belongs.
 
 ---
 
@@ -313,7 +313,7 @@ EasyAI also works outside Jakarta EE — plain Java, unit tests, standalone apps
 <dependency>
     <groupId>io.github.tabforgeai</groupId>
     <artifactId>tabforge-ai</artifactId>
-    <version>3.1.0</version>
+    <version>4.0.0</version>
 </dependency>
 ```
 
