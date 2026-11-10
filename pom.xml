@@ -11,7 +11,7 @@
     <packaging>jar</packaging>
 
     <name>TabForge AI</name>
-    <description>Jakarta EE library: DynTabs multi-tab PrimeFaces UI + EasyAI LangChain4J abstraction layer</description>
+    <description>AI for Jakarta EE, without the plumbing. DynTabs gives PrimeFaces a real multi-tab UI with a CDI scope per tab; EasyAI turns LangChain4j into one-liners for assistants, EJB tools, RAG, structured extraction, voice and probability-based decisions.</description>
     <url>https://github.com/tabforgeai/tabforge-ai</url>
 
     <licenses>
