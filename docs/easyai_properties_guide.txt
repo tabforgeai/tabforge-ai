@@ -1,0 +1,300 @@
+================================================================================
+  easyai.properties — COMPLETE REFERENCE
+  TabForge AI / EasyAI
+================================================================================
+
+  WHERE THIS FILE LIVES
+  ---------------------
+  EasyAI reads ONE file from the classpath root:
+
+      src/main/resources/easyai.properties
+
+  It is optional. Everything in it can also be supplied programmatically, and a
+  missing file is not an error - EasyAI simply falls back to defaults and to
+  whatever you set in code.
+
+  NEVER COMMIT A REAL KEY. Keep the file in git with EMPTY values and fill them
+  in locally, or keep it out of git entirely.
+
+
+  THE ONE IDEA THAT EXPLAINS THE LAYOUT
+  -------------------------------------
+  There are four groups of settings - chat, voice, decisions and Milvus - and
+  the last three INHERIT from the first:
+
+      easyai.provider / api-key / base-url          <- the chat settings
+            |
+            +-- easyai.stt.*        speech to text  ) inherit provider, key and
+            +-- easyai.tts.*        text to speech  ) base URL unless you
+            +-- easyai.decision.*   decisions       ) override them
+
+  So an app that has configured chat usually needs NOTHING extra to gain voice.
+  You only write an easyai.stt.* / easyai.tts.* / easyai.decision.* key when
+  that capability should differ from chat - a different provider, a different
+  key, or a model name that chat does not have.
+
+  Model names are the exception: they are NEVER inherited. easyai.model-name is
+  a CHAT model, and sending it to a transcription or decisions endpoint would
+  fail in a confusing way, so each capability has its own default instead.
+
+  Blank counts as absent. In the voice and decision groups an empty value is
+  treated as "not set", so a half-filled template line cannot shadow a working
+  fallback.
+
+
+================================================================================
+  1. CHAT  —  the base settings everything else inherits
+================================================================================
+
+  Read by: EasyAIConfigLoader -> EasyAIConfig -> ModelFactory
+  Used by: EasyAI.chat(), EasyAI.assistant(), EasyAI.agent(), EasyAI.flow(),
+           EasyAI.extract()
+
+  easyai.provider
+      Which provider builds the chat model. Supported: openai, ollama.
+      Default: openai
+      "openai" also covers every OpenAI-COMPATIBLE service - Groq, Azure
+      OpenAI, DeepSeek, vLLM, LM Studio - by pointing easyai.base-url at it.
+      "ollama" is a convenience: it is the same OpenAI-compatible client with
+      base URL http://localhost:11434/v1/ and a dummy key, so a local Ollama
+      needs no key at all.
+
+  easyai.api-key
+      The provider API key. Default: none.
+      Not needed for Ollama.
+
+  easyai.base-url
+      Override the provider endpoint. Default: the provider's own.
+      This is how you reach an OpenAI-compatible service, e.g.
+          https://api.groq.com/openai/v1/
+
+  easyai.model-name
+      The chat model id, e.g. gpt-4o-mini, llama-3.3-70b-versatile, llama3.
+      Default: the provider's own default.
+
+  easyai.temperature
+      0.0 - 1.0. Lower is more deterministic. Default: the provider's default.
+      Note: EasyAI.extract() uses 0.0 regardless, since extraction wants the
+      same answer every time.
+
+  easyai.max-tokens
+      Cap on the response length. Default: the provider's default.
+
+  Programmatic equivalent (wins over the file):
+      EasyAI.configure(EasyAIConfig.builder()
+              .provider("openai").apiKey("sk-...").modelName("gpt-4o-mini").build());
+  and per-builder overrides such as .withApiKey(...) / .withModel(...).
+
+
+================================================================================
+  2. VOICE — speech to text   (EasyAI.listen())
+================================================================================
+
+  Read by: dyntabs.ai.voice.VoiceConfig.forListening()
+  Used by: EasyAI.listen().from(audio, mimeType)
+  Calls:   POST {baseUrl}/audio/transcriptions   (OpenAI-compatible)
+
+  easyai.stt.provider      Falls back to easyai.provider, then "openai".
+  easyai.stt.api-key       Falls back to easyai.api-key.
+  easyai.stt.base-url      Falls back to easyai.base-url.
+
+  easyai.stt.model-name
+      The transcription model. Default: whisper-1 (OpenAI's own).
+      NOT inherited from easyai.model-name.
+      IMPORTANT: nothing is guessed from the base URL. If your base URL points
+      somewhere other than OpenAI, name that service's model explicitly - on
+      Groq, for example:
+          easyai.stt.model-name=whisper-large-v3
+      A wrong model name fails loudly at the provider, which is far easier to
+      debug than a library quietly choosing a different one.
+
+  easyai.stt.language
+      Expected spoken language as ISO-639-1 (sr, en, de...). Default: unset,
+      which means the model detects the language itself - usually what you want
+      for a bilingual audience, and something a browser recognizer pinned to one
+      locale cannot do. Set it when you know the language and want the accuracy.
+
+  Per-call overrides: .withModel(...), .withLanguage(...), .withApiKey(...),
+  .withBaseUrl(...), .withConfig(VoiceConfig).
+
+
+================================================================================
+  3. VOICE — text to speech   (EasyAI.speak())
+================================================================================
+
+  Read by: dyntabs.ai.voice.VoiceConfig.forSpeaking()
+  Used by: EasyAI.speak().from(text)  ->  Speech (bytes + MIME type)
+  Calls:   POST {baseUrl}/audio/speech   (OpenAI-compatible)
+
+  easyai.tts.provider      Falls back to easyai.provider, then "openai".
+  easyai.tts.api-key       Falls back to easyai.api-key.
+  easyai.tts.base-url      Falls back to easyai.base-url.
+
+  easyai.tts.model-name
+      The synthesis model. Default: tts-1 (OpenAI's own).
+      NOT inherited from easyai.model-name.
+
+  easyai.tts.voice
+      The voice name, e.g. alloy, nova. Default: alloy.
+      Voice names are provider-specific.
+
+  Per-call overrides: .withModel(...), .withVoice(...), .withApiKey(...),
+  .withBaseUrl(...), .withConfig(VoiceConfig).
+
+  Note: the browser can also speak text for free through the Web Speech API,
+  with no server call at all. Reach for EasyAI.speak() when you need ONE
+  consistent voice across browsers and devices, a language the client has no
+  installed voice for, or audio you can store, attach and replay.
+
+
+================================================================================
+  4. DECISIONS   (EasyAI.decide())
+================================================================================
+
+  Read by: dyntabs.ai.decision.DecisionConfig.forDeciding()
+  Used by: EasyAI.decide(text).isYes(...) / .choose(...) / .rate(...) / .ask()
+  Calls:   POST {baseUrl}/decisions
+
+  !! READ THIS BEFORE CONFIGURING IT
+  A decision model is a DEDICATED ENDPOINT, not a chat completion with an extra
+  parameter. OpenAI serves it at POST {baseUrl}/decisions with its own small
+  model. OpenAI-compatible CHAT providers - Groq, DeepSeek - do NOT implement
+  that endpoint and answer 404. Being "OpenAI-compatible" does not help here.
+
+  So unlike voice, where inheriting the chat endpoint is almost always right,
+  inheritance here is only right when your chat provider IS OpenAI. If it is
+  not, set both explicitly:
+
+      easyai.decision.api-key=sk-...
+      easyai.decision.base-url=https://api.openai.com/v1/
+
+  (LangChain4j also offers Ollama - its local, key-free System One API, needing
+  Ollama 0.35.0+ and a pulled decision model such as nimble - and TypeSafe, each
+  in its own module. EasyAI currently builds in the OpenAI path only.)
+
+  easyai.decision.provider   Falls back to easyai.provider, then "openai".
+  easyai.decision.api-key    Falls back to easyai.api-key.
+  easyai.decision.base-url   Falls back to easyai.base-url.
+
+  easyai.decision.model-name
+      The decision model. Default: gpt-6-luna.
+      NOT inherited from easyai.model-name.
+
+  Per-call overrides: .withModel(...), .withApiKey(...), .withBaseUrl(...),
+  .withProvider(...), .withConfig(DecisionConfig).
+
+
+================================================================================
+  5. MILVUS — persistent vector store (optional)
+================================================================================
+
+  Read by: dyntabs.ai.rag.MilvusConfig.fromProperties()
+  Used by: EasyAI.indexer().toMilvus()            (write path)
+           EasyAI.assistant(...).withMilvus()     (read path)
+
+  Only needed for PERSISTENT RAG. The in-memory RAG of withRAG(...) / @EasyRAG
+  needs none of this.
+
+  easyai.milvus.host         Default: localhost
+  easyai.milvus.port         Default: 19530
+  easyai.milvus.collection   The collection name. Required for the no-arg form.
+  easyai.milvus.dimension    Embedding dimension. Default: 384, which matches
+                             the local model bundled with langchain4j-easy-rag
+                             (all-MiniLM-L6-v2). It MUST match your embedding
+                             model or Milvus rejects the vectors.
+  easyai.milvus.username     Optional credentials.
+  easyai.milvus.password     Optional credentials.
+
+  Dependencies: langchain4j-easy-rag and langchain4j-milvus are <optional> in
+  the tabforge-ai POM, so an app using RAG or Milvus must declare them itself.
+  See README / easyai_guide "Optional RAG & Milvus dependencies" - including the
+  commons-lang3 pin required when both are present.
+
+
+================================================================================
+  6. A WORKED EXAMPLE — one file, three providers, four capabilities
+================================================================================
+
+  This is the TabForge AI demo's own setup, and it shows why the groups inherit
+  rather than repeat:
+
+      # chat + speech-to-text run on Groq
+      easyai.provider=openai
+      easyai.api-key=gsk_...
+      easyai.base-url=https://api.groq.com/openai/v1/
+      easyai.model-name=openai/gpt-oss-120b
+
+      # Groq has no whisper-1, so name its model (the only STT line needed)
+      easyai.stt.model-name=whisper-large-v3
+
+      # text-to-speech on OpenAI
+      easyai.tts.api-key=sk-...
+      easyai.tts.base-url=https://api.openai.com/v1/
+
+      # decisions on OpenAI - a dedicated endpoint Groq does not implement
+      easyai.decision.api-key=sk-...
+      easyai.decision.base-url=https://api.openai.com/v1/
+
+  Four capabilities, three providers, one file - and the chat settings are
+  written once.
+
+
+================================================================================
+  7. QUICK TABLE
+================================================================================
+
+  Key                          Default               Inherits from
+  ---------------------------  --------------------  -------------------------
+  easyai.provider              openai                -
+  easyai.api-key               (none)                -
+  easyai.base-url              provider default      -
+  easyai.model-name            provider default      -
+  easyai.temperature           provider default      -
+  easyai.max-tokens            provider default      -
+  easyai.stt.provider          openai                easyai.provider
+  easyai.stt.api-key           (none)                easyai.api-key
+  easyai.stt.base-url          provider default      easyai.base-url
+  easyai.stt.model-name        whisper-1             NOT inherited
+  easyai.stt.language          auto-detect           -
+  easyai.tts.provider          openai                easyai.provider
+  easyai.tts.api-key           (none)                easyai.api-key
+  easyai.tts.base-url          provider default      easyai.base-url
+  easyai.tts.model-name        tts-1                 NOT inherited
+  easyai.tts.voice             alloy                 -
+  easyai.decision.provider     openai                easyai.provider
+  easyai.decision.api-key      (none)                easyai.api-key
+  easyai.decision.base-url     provider default      easyai.base-url
+  easyai.decision.model-name   gpt-6-luna            NOT inherited
+  easyai.milvus.host           localhost             -
+  easyai.milvus.port           19530                 -
+  easyai.milvus.collection     (required)            -
+  easyai.milvus.dimension      384                   -
+  easyai.milvus.username       (none)                -
+  easyai.milvus.password       (none)                -
+
+
+================================================================================
+  8. TROUBLESHOOTING
+================================================================================
+
+  "No API key configured for ..." with a property name in the message
+      EasyAI checked the capability key, then the chat key, and found neither.
+      The message names exactly which property to set.
+
+  404 from the provider on EasyAI.decide()
+      The endpoint is not implemented there. See section 4 - decisions are not
+      part of the OpenAI-compatible chat surface.
+
+  404 or "model not found" on EasyAI.listen() / speak()
+      The default model name (whisper-1 / tts-1) is OpenAI's, and your base URL
+      points elsewhere. Name that service's model explicitly.
+
+  An empty value behaves like a missing one
+      That is intentional for the voice and decision groups, so a half-filled
+      template cannot shadow a good fallback. The chat group takes the value as
+      written.
+
+  Nothing in the file seems to apply
+      The file must be at the CLASSPATH ROOT - src/main/resources/easyai.properties
+      - and programmatic settings (EasyAI.configure, per-builder .withX) win
+      over it.

@@ -36,6 +36,8 @@ Supported providers: `openai`, `ollama`
 
 That is also all the configuration voice needs — `EasyAI.listen()` / `EasyAI.speak()` inherit these settings (see section 8b).
 
+Full key-by-key reference (every key, its default, and what inherits from what): `docs/easyai_properties_guide.txt`.
+
 For Ollama (local, free):
 ```properties
 easyai.provider=ollama

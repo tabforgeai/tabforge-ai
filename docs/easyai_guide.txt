@@ -77,6 +77,11 @@
 
 
 ================================================================================
+  Every configuration key is documented key-by-key in docs/easyai_properties_guide.txt
+  - what it does, where the library uses it, its default, and what inherits from
+  what. Read that one when wiring a new provider or capability.
+
+
   USE CASE 1: Simple Chat
 ================================================================================
 
